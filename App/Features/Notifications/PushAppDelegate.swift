@@ -58,12 +58,19 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
         super.init()
         let center = UNUserNotificationCenter.current()
         center.delegate = self
+        registerNotificationActions()
+    }
+
+    // Notification actions are eagerly registered with the OS, outside SwiftUI's
+    // locale environment. Register again when the in-app language changes.
+    func registerNotificationActions() {
+        let center = UNUserNotificationCenter.current()
         // Platform exception: SwiftUI cannot register notification actions, and
         // APNs delivers their text-input responses only through this delegate.
         let action = UNTextInputNotificationAction(
-            identifier: QuickReply.actionIdentifier, title: String(localized: "Reply"),
-            options: [], textInputButtonTitle: String(localized: "Send"),
-            textInputPlaceholder: String(localized: "Message"))
+            identifier: QuickReply.actionIdentifier, title: AppLanguage.localized("Reply"),
+            options: [], textInputButtonTitle: AppLanguage.localized("Send"),
+            textInputPlaceholder: AppLanguage.localized("Message"))
         center.setNotificationCategories([
             UNNotificationCategory(
                 identifier: QuickReply.categoryIdentifier, actions: [action],

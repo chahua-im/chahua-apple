@@ -35,7 +35,9 @@ struct SavedMessagesView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text(item.sender.name ?? "User \(item.sender.uid)").font(.headline)
+                            Text(
+                                item.sender.name ?? AppLanguage.localized("User \(item.sender.uid)")
+                            ).font(.headline)
                             Spacer()
                             Text(item.originalCreatedAt, style: .date)
                                 .font(.caption).foregroundStyle(.secondary)
@@ -105,23 +107,22 @@ struct SavedMessagesView: View {
     }
 
     private func summary(_ item: SavedMessageResponse) -> String {
-        if item.messageType == .forwarded { return String(localized: "Forwarded Messages") }
+        if item.messageType == .forwarded { return AppLanguage.localized("Forwarded Messages") }
         if let text = item.message, !text.isEmpty { return text }
         if let sticker = item.sticker {
-            return "\(sticker.emoji) \(sticker.name ?? String(localized: "Sticker"))"
+            return "\(sticker.emoji) \(sticker.name ?? AppLanguage.localized("Sticker"))"
         }
         if !item.attachments.isEmpty {
             return item.attachments.map(\.fileName).joined(separator: ", ")
         }
-        return String(localized: "Saved Message")
+        return AppLanguage.localized("Saved Message")
     }
 
     private func locate(_ item: SavedMessageResponse) async {
         guard locatingID == nil else { return }
         guard item.canLocateContext else {
-            sourceError = String(
-                localized:
-                    "The source is no longer accessible. Your saved snapshot is still available.")
+            sourceError = AppLanguage.localized(
+                "The source is no longer accessible. Your saved snapshot is still available.")
             return
         }
         let revision = saved.revision
@@ -132,17 +133,15 @@ struct SavedMessagesView: View {
                 chatID: item.originalChatId, messageID: item.originalMessageId)
             guard !Task.isCancelled, revision == saved.revision else { return }
             guard !message.isDeleted else {
-                sourceError = String(
-                    localized:
-                        "The source message was removed. Your saved snapshot is still available.")
+                sourceError = AppLanguage.localized(
+                    "The source message was removed. Your saved snapshot is still available.")
                 return
             }
             onOpenSource(message, chat)
         } catch {
             guard !(error is CancellationError), revision == saved.revision else { return }
-            sourceError = String(
-                localized:
-                    "Couldn’t open the source. It may be unavailable or you may no longer have access. Your saved snapshot is unchanged; try again later."
+            sourceError = AppLanguage.localized(
+                "Couldn’t open the source. It may be unavailable or you may no longer have access. Your saved snapshot is unchanged; try again later."
             )
         }
     }
@@ -332,7 +331,7 @@ private struct SavedMessageDetailView: View {
         actions.openAttachment = { presentedFile = $0 }
         actions.openMedia = { gallery in
             var gallery = gallery
-            gallery.conversationTitle = String(localized: "Saved Messages")
+            gallery.conversationTitle = AppLanguage.localized("Saved Messages")
             imageDetailPresenter?.present(gallery)
             if imageDetailPresenter?.gallery?.id == gallery.id { presentedGalleryID = gallery.id }
         }

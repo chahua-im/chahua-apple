@@ -1496,7 +1496,7 @@ struct AuthenticatedShell: View {
         let revision = chatStore.sessionRevision
         let origin = AppConfiguration.applicationURL
         guard url.scheme == origin.scheme, url.host == origin.host, url.port == origin.port else {
-            navigationError = String(localized: "This link belongs to a different server.")
+            navigationError = AppLanguage.localized("This link belongs to a different server.")
             return
         }
         if let link = MessagePermalink(url: url) {
@@ -1511,15 +1511,15 @@ struct AuthenticatedShell: View {
                 performOpenMessageTarget(message, in: chat)
             } catch is CancellationError {
             } catch {
-                navigationError = String(
-                    localized: "This message is unavailable or you do not have access.")
+                navigationError = AppLanguage.localized(
+                    "This message is unavailable or you do not have access.")
             }
         } else if url.path.hasPrefix("/chats/join/"),
             let code = GroupInviteLink.code(from: url.absoluteString)
         {
             feature = .joinGroup(code)
         } else {
-            navigationError = String(localized: "This link is not supported.")
+            navigationError = AppLanguage.localized("This link is not supported.")
         }
     }
 

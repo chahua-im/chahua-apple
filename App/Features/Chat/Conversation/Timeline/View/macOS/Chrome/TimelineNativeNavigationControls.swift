@@ -36,7 +36,8 @@
                 count: Int64(reactions), label: "Jump to next reaction",
                 value: AppLanguage.localized("\(reactions) unread reactions"), color: badgeColor)
             mention.configure(
-                count: Int64(mentions), label: "Jump to next mention or reply",
+                count: Int64(mentions),
+                label: "Jump to next mention or reply",
                 value: AppLanguage.localized("\(mentions) unread mentions and replies"),
                 color: badgeColor)
             latest.configure(

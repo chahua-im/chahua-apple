@@ -24,7 +24,7 @@ final class ShareExtensionModel: ObservableObject {
     @Published private(set) var selectedDestination: ShareDestination?
     @Published var caption = ""
     @Published private(set) var media: [ShareMedia] = []
-    @Published private(set) var contentSummary = "Preparing shared content…"
+    @Published private(set) var contentSummary = String(localized: "Preparing shared content…")
     @Published private(set) var errorMessage: String?
     @Published private(set) var isUploading = false
     @Published private(set) var compressionEnabled = true
@@ -134,7 +134,7 @@ final class ShareExtensionModel: ObservableObject {
         do {
             guard let (token, api) = try makeSession() else {
                 state = .missingAuthentication
-                contentSummary = "Sign in to Chahua to share this content."
+                contentSummary = String(localized: "Sign in to Chahua to share this content.")
                 return
             }
             if let sessionToken, sessionToken != token {
@@ -277,7 +277,8 @@ final class ShareExtensionModel: ObservableObject {
             guard self.permissionID == permissionID else { return }
             canWriteToDestination = canWrite
             isCheckingPermission = false
-            destinationPermissionMessage = canWrite ? nil : "You can’t send to this destination."
+            destinationPermissionMessage =
+                canWrite ? nil : String(localized: "You can’t send to this destination.")
         } catch is CancellationError {
             return
         } catch {
@@ -341,7 +342,7 @@ final class ShareExtensionModel: ObservableObject {
             try Task.checkCancellation()
             guard generation == currentGeneration else { return }
             state = .sent
-            contentSummary = "Sent to \(request.destination.title)."
+            contentSummary = String(localized: "Sent to \(request.destination.title).")
             errorMessage = nil
         } catch is CancellationError {
             guard generation == currentGeneration else { return }
@@ -452,13 +453,16 @@ final class ShareExtensionModel: ObservableObject {
     private func present(error: Error, whileLoading: Bool) {
         if Self.isAuthenticationError(error) {
             state = .missingAuthentication
-            errorMessage =
-                "Your Chahua session has expired. Sign in to Chahua, then retry this share."
+            errorMessage = String(
+                localized:
+                    "Your Chahua session has expired. Sign in to Chahua, then retry this share.")
             return
         }
         state = .failed
         errorMessage = Self.message(for: error)
-        if whileLoading { contentSummary = "Your shared items are still available to retry." }
+        if whileLoading {
+            contentSummary = String(localized: "Your shared items are still available to retry.")
+        }
     }
 
     private static func isAuthenticationError(_ error: Error) -> Bool {
@@ -474,14 +478,17 @@ final class ShareExtensionModel: ObservableObject {
         if let error = error as? APIError {
             switch error {
             case .transport:
-                return "Chahua couldn’t be reached. Check your connection and retry."
+                return String(
+                    localized: "Chahua couldn’t be reached. Check your connection and retry.")
             case .http(let status, _), .invalidResponse(let status):
-                return "Chahua couldn’t complete the request (HTTP \(status)). Retry this share."
+                return String(
+                    localized:
+                        "Chahua couldn’t complete the request (HTTP \(status)). Retry this share.")
             default:
-                return "Chahua couldn’t complete the request. Retry this share."
+                return String(localized: "Chahua couldn’t complete the request. Retry this share.")
             }
         }
-        return "Chahua couldn’t complete the request. Retry this share."
+        return String(localized: "Chahua couldn’t complete the request. Retry this share.")
     }
 
     private func loadDestinations(using api: any ChahuaAPIClient, generation currentGeneration: Int)
@@ -499,11 +506,12 @@ final class ShareExtensionModel: ObservableObject {
                         contentsOf: page.chats.map { chat in
                             let title =
                                 chat.kind == .dm
-                                ? chat.peer?.username ?? chat.name ?? "Chat" : chat.name ?? "Chat"
+                                ? chat.peer?.username ?? chat.name ?? String(localized: "Chat")
+                                : chat.name ?? String(localized: "Chat")
                             return .chat(
                                 chatID: chat.id, title: title,
                                 subtitle: chat.lastMessage.map {
-                                    Self.previewText($0, fallback: "Message")
+                                    Self.previewText($0, fallback: String(localized: "Message"))
                                 },
                                 activityDate: chat.lastMessageAt ?? .distantPast,
                                 avatarURL: (chat.kind == .dm ? chat.peer?.avatarUrl : chat.avatar)
@@ -542,9 +550,11 @@ final class ShareExtensionModel: ObservableObject {
                                 ? thread.peer?.username ?? thread.chatName : thread.chatName
                             return .thread(
                                 chatID: thread.chatId, threadID: root.id.description,
-                                title: Self.previewText(root, fallback: "Message"),
+                                title: Self.previewText(
+                                    root, fallback: String(localized: "Message")),
                                 subtitle: Self.previewText(
-                                    thread.lastReply ?? root, fallback: "Message"),
+                                    thread.lastReply ?? root, fallback: String(localized: "Message")
+                                ),
                                 activityDate: thread.lastReplyAt,
                                 avatarURL: (thread.chatKind == .dm
                                     ? thread.peer?.avatarUrl : thread.chatAvatar)
@@ -660,12 +670,26 @@ nonisolated private struct ShareDraft: Sendable {
 
     var summary: String {
         var parts: [String] = []
-        if !text.isEmpty { parts.append("\(text.count) text item\(text.count == 1 ? "" : "s")") }
-        if !urls.isEmpty { parts.append("\(urls.count) link\(urls.count == 1 ? "" : "s")") }
-        if !media.isEmpty {
-            parts.append("\(media.count) media item\(media.count == 1 ? "" : "s")")
+        if !text.isEmpty {
+            parts.append(
+                text.count == 1
+                    ? String(localized: "1 text item")
+                    : String(localized: "\(text.count) text items"))
         }
-        return parts.isEmpty ? "No shareable content was found." : parts.joined(separator: ", ")
+        if !urls.isEmpty {
+            parts.append(
+                urls.count == 1
+                    ? String(localized: "1 link") : String(localized: "\(urls.count) links"))
+        }
+        if !media.isEmpty {
+            parts.append(
+                media.count == 1
+                    ? String(localized: "1 media item")
+                    : String(localized: "\(media.count) media items"))
+        }
+        return parts.isEmpty
+            ? String(localized: "No shareable content was found.")
+            : ListFormatter.localizedString(byJoining: parts)
     }
 }
 
@@ -1041,20 +1065,37 @@ nonisolated private enum ShareExtensionError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unavailable: "This shared item couldn’t be read. Try sharing it again."
-        case .invalidConfiguration: "Chahua isn’t configured for sharing on this device."
-        case .unsupportedMedia: "Only images and videos can be sent as media."
+        case .unavailable:
+            String(localized: "This shared item couldn’t be read. Try sharing it again.")
+        case .invalidConfiguration:
+            String(localized: "Chahua isn’t configured for sharing on this device.")
+        case .unsupportedMedia:
+            String(localized: "Only images and videos can be sent as media.")
         case .fileTooLarge(let limit):
-            "A shared file exceeds Chahua’s \(ByteCountFormatter.string(fromByteCount: limit, countStyle: .file)) limit."
+            String(
+                localized:
+                    "A shared file exceeds Chahua’s \(ByteCountFormatter.string(fromByteCount: limit, countStyle: .file)) limit."
+            )
         case .noSupportedContent(let failures):
-            failures.first ?? "This share does not contain text, web links, images, or videos."
+            failures.first
+                ?? String(
+                    localized: "This share does not contain text, web links, images, or videos.")
         case .incompleteAcquisition(let failures):
-            "Every shared item must be available before sending. \(failures.first ?? "Retry this share.")"
+            String(
+                localized:
+                    "Every shared item must be available before sending. \(failures.first ?? String(localized: "Retry this share."))"
+            )
         case .accountChangedAfterSend:
-            "This share was started by a different Chahua account. Cancel it and share again."
-        case .unsafeUpload: "Chahua rejected an unsafe media upload instruction."
-        case .invalidUpload: "The media upload returned an invalid response."
-        case .uploadStatus(let status): "The media upload failed (HTTP \(status))."
+            String(
+                localized:
+                    "This share was started by a different Chahua account. Cancel it and share again."
+            )
+        case .unsafeUpload:
+            String(localized: "Chahua rejected an unsafe media upload instruction.")
+        case .invalidUpload:
+            String(localized: "The media upload returned an invalid response.")
+        case .uploadStatus(let status):
+            String(localized: "The media upload failed (HTTP \(status)).")
         }
     }
 }

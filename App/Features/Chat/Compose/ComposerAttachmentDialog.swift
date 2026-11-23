@@ -213,7 +213,7 @@ struct ComposerAttachmentDialog: View {
                     .frame(width: headerButtonSize, height: headerButtonSize)
                     .background(.background.opacity(0.8), in: Circle())
             }
-            .accessibilityLabel(isEditing ? "Close attachments" : "Cancel")
+            .accessibilityLabel(isEditing ? LocalizedStringKey("Close attachments") : "Cancel")
             .disabled(isAcquiring || isSubmitting || isCancelling)
             Spacer()
             Text("\(attachments.count) Attachments")

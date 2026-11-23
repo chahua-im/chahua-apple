@@ -182,7 +182,9 @@ struct GroupInfoView: View {
                 VoicePlaybackHeaderRow()
             }
         }
-        .navigationTitle(usesContentHeader ? "" : (isDM ? "Chat Info" : "Group Info"))
+        .navigationTitle(
+            usesContentHeader ? LocalizedStringKey("") : (isDM ? "Chat Info" : "Group Info")
+        )
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             // Pushed pages restore native navigation chrome and its Back button.
@@ -303,7 +305,7 @@ struct GroupInfoView: View {
                 .accessibilityLabel("Close")
                 .accessibilityIdentifier("group-info-close-button")
             }
-            Text(isDM ? "Chat Info" : "Group Info")
+            Text(isDM ? LocalizedStringKey("Chat Info") : "Group Info")
                 .font(.subheadline.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)

@@ -126,7 +126,7 @@ final class SavedMessageController: ObservableObject {
                 guard generation == requestGeneration, !(error is CancellationError) else { return }
                 // This is background menu metadata, not a user-initiated mutation.
                 // Keep failure visible/retryable in its chat without presenting a modal.
-                scopeErrors[chatID] = String(localized: "Couldn’t load saved-message status.")
+                scopeErrors[chatID] = AppLanguage.localized("Couldn’t load saved-message status.")
                 if case APIError.invalidToken = error { await onInvalidToken() }
             }
         }
@@ -257,7 +257,7 @@ final class SavedMessageController: ObservableObject {
             additions = additions.filter { $0.value.version > startVersion }
         } catch {
             guard generation == requestGeneration, !(error is CancellationError) else { return }
-            listError = String(localized: "Couldn’t load saved messages. Try again.")
+            listError = AppLanguage.localized("Couldn’t load saved messages. Try again.")
             failedListWasMore = more
             if case APIError.invalidToken = error { await onInvalidToken() }
         }
@@ -284,7 +284,7 @@ final class SavedMessageController: ObservableObject {
 
     private func report(_ error: any Error, generation requestGeneration: Int) async {
         guard generation == requestGeneration, !(error is CancellationError) else { return }
-        errorMessage = String(localized: "Couldn’t update saved messages. Try again.")
+        errorMessage = AppLanguage.localized("Couldn’t update saved messages. Try again.")
         if case APIError.invalidToken = error { await onInvalidToken() }
     }
 }

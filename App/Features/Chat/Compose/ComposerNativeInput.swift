@@ -45,7 +45,7 @@ protocol ComposerNativeInput: AnyObject {
         var focus: Binding<Bool>? = nil
         var fontSize: CGFloat? = nil
         var maximumHeight: CGFloat = .greatestFiniteMagnitude
-        var accessibilityLabel = "Caption"
+        var accessibilityLabel = AppLanguage.localized("Caption")
 
         func makeNSView(context: Context) -> ComposerCaptionScrollView {
             let view = ComposerCaptionScrollView()
@@ -112,7 +112,7 @@ protocol ComposerNativeInput: AnyObject {
                 width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             editor.autoresizingMask = [.width]
             editor.delegate = self
-            editor.setAccessibilityLabel("Caption")
+            editor.setAccessibilityLabel(AppLanguage.localized("Caption"))
             documentView = editor
             addSubview(marker)
         }

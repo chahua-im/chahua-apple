@@ -110,7 +110,7 @@ struct ShareExtensionRootView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(
                                 model.media.isEmpty
-                                    ? "Message"
+                                    ? LocalizedStringKey("Message")
                                     : model.media.count == 1
                                         ? "1 media item"
                                         : "\(model.media.count) media items"
@@ -122,7 +122,10 @@ struct ShareExtensionRootView: View {
                                 .lineLimit(2)
                         }
                         Spacer(minLength: 0)
-                        Button(model.selectedDestination == nil ? "Choose" : "Change") {
+                        Button(
+                            model.selectedDestination == nil
+                                ? LocalizedStringKey("Choose") : "Change"
+                        ) {
                             dismissInput()
                         }
                         .disabled(!model.canChangeDestination)
@@ -217,7 +220,8 @@ struct ShareExtensionRootView: View {
     /// Placeholder-only field with an inset surface; its accessibility label remains explicit.
     private var captionEditor: some View {
         TextField(
-            model.media.isEmpty ? "Message" : "Add a caption…", text: $model.caption,
+            model.media.isEmpty ? LocalizedStringKey("Message") : "Add a caption…",
+            text: $model.caption,
             axis: .vertical
         )
         .textFieldStyle(.plain)
@@ -225,7 +229,7 @@ struct ShareExtensionRootView: View {
         .focused($isCaptionFocused)
         .accessibilityIdentifier("share.caption")
         .disabled(!model.canEditContent)
-        .accessibilityLabel(model.media.isEmpty ? "Message" : "Caption")
+        .accessibilityLabel(model.media.isEmpty ? LocalizedStringKey("Message") : "Caption")
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .background(
@@ -284,8 +288,8 @@ struct ShareExtensionRootView: View {
         .padding(.vertical, 12)
         .accessibilityHint(
             model.canSend
-                ? "Sends to \(selectedDestinationTitle)"
-                : "Choose a ready destination before sending")
+                ? Text("Sends to \(selectedDestinationTitle)")
+                : Text("Choose a ready destination before sending"))
     }
 
     private var loading: some View {
@@ -329,7 +333,7 @@ struct ShareExtensionRootView: View {
                 .font(.title3.weight(.semibold))
             Text(
                 model.isUploading
-                    ? "Uploading media…"
+                    ? LocalizedStringKey("Uploading media…")
                     : "Your share is on its way to \(selectedDestinationTitle)."
             )
             .font(.callout)
@@ -368,7 +372,9 @@ struct ShareExtensionRootView: View {
     }
 
     private var selectedDestinationTitle: String {
-        guard let destination = model.selectedDestination else { return "Choose a destination" }
+        guard let destination = model.selectedDestination else {
+            return String(localized: "Choose a destination")
+        }
         return destination.title
     }
 
@@ -427,13 +433,15 @@ struct ShareExtensionRootView: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityHint(
             isSelected
-                ? "Selected destination"
+                ? LocalizedStringKey("Selected destination")
                 : model.canChangeDestination
                     ? "Select destination" : "Destination is locked while sending"
         )
     }
 
-    private func retryStatus(_ message: String, retryTitle: String, action: @escaping () -> Void)
+    private func retryStatus(
+        _ message: String, retryTitle: LocalizedStringKey, action: @escaping () -> Void
+    )
         -> some View
     {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -451,7 +459,8 @@ struct ShareExtensionRootView: View {
     }
 
     private func unavailableState(
-        title: String, systemImage: String, description: String, actionTitle: String,
+        title: LocalizedStringKey, systemImage: String, description: String,
+        actionTitle: LocalizedStringKey,
         action: @escaping () -> Void
     ) -> some View {
         ContentUnavailableView {

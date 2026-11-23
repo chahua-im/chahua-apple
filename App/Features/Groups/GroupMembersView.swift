@@ -227,7 +227,10 @@ struct GroupMembersView: View {
                         }
                     }
                 }
-                Button(member.role == .admin ? "Demote to member" : "Promote to admin") {
+                Button(
+                    member.role == .admin
+                        ? LocalizedStringKey("Demote to member") : "Promote to admin"
+                ) {
                     pendingAction = .init(
                         member: member, kind: member.role == .admin ? .demote : .promote)
                 }

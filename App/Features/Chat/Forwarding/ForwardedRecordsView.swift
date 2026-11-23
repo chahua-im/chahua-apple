@@ -171,7 +171,7 @@ struct ForwardedRecordsView: View {
                     return
                 }
                 var gallery = gallery
-                gallery.conversationTitle = String(localized: "Forwarded Messages")
+                gallery.conversationTitle = AppLanguage.localized("Forwarded Messages")
                 imageDetailPresenter.present(gallery)
                 if imageDetailPresenter.gallery?.id == gallery.id {
                     presentedGalleryID = gallery.id

@@ -259,7 +259,7 @@ private struct StickerPackRow: View {
                     }
                     Text(pack.name).lineLimit(1)
                 }
-                Text("\(pack.stickerCount) \(pack.stickerCount == 1 ? "sticker" : "stickers")")
+                Text("\(pack.stickerCount) stickers")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -331,7 +331,7 @@ struct StickerPackDetailSettingsView: View {
                     description: Text("Try refreshing to load this pack."))
             }
         }
-        .navigationTitle(pack?.name ?? "Sticker Pack")
+        .navigationTitle(pack?.name ?? AppLanguage.localized("Sticker Pack"))
         .voicePlaybackHeader()
         .voicePlaybackCovered(selectedFile != nil)
         #if os(iOS)

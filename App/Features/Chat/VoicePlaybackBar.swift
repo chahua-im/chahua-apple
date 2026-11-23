@@ -136,7 +136,8 @@ struct VoicePlaybackCapsule: View {
 
     private var sender: Text {
         if message.sender.uid == route.currentUserID { return Text("You") }
-        return Text(verbatim: message.sender.name ?? "User \(message.sender.uid)")
+        return Text(
+            verbatim: message.sender.name ?? AppLanguage.localized("User \(message.sender.uid)"))
     }
 
     private var chat: Text {

@@ -103,8 +103,8 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
             guard granted else {
                 self.phase = .idle
                 self.isLocked = false
-                self.error = String(
-                    localized: "Allow microphone access in Settings to record voice messages.")
+                self.error = AppLanguage.localized(
+                    "Allow microphone access in Settings to record voice messages.")
                 return
             }
             self.permissionWasGranted = true
@@ -162,9 +162,8 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
                 self.discard()
             } else {
                 self.phase = .preview
-                self.error = String(
-                    localized:
-                        "Couldn’t send the voice message. Your recording is ready to try again.")
+                self.error = AppLanguage.localized(
+                    "Couldn’t send the voice message. Your recording is ready to try again.")
             }
         }
     }
@@ -258,8 +257,8 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
             }
         } catch {
             discard()
-            self.error = String(
-                localized: "Couldn’t start recording. Check your microphone and try again.")
+            self.error = AppLanguage.localized(
+                "Couldn’t start recording. Check your microphone and try again.")
         }
     }
 
@@ -292,8 +291,8 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
                 self.stop()
             } else {
                 self.discard()
-                self.error = String(
-                    localized: "Recording was interrupted. Please record your message again.")
+                self.error = AppLanguage.localized(
+                    "Recording was interrupted. Please record your message again.")
             }
         }
     }
@@ -305,8 +304,8 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
         Task { @MainActor [weak self] in
             guard let self, self.recorder?.url == url else { return }
             self.discard()
-            self.error = String(
-                localized: "Recording was interrupted. Please record your message again.")
+            self.error = AppLanguage.localized(
+                "Recording was interrupted. Please record your message again.")
         }
     }
 }

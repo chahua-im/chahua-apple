@@ -80,10 +80,13 @@ struct FriendRequestsView: View {
                                 .font(.body.weight(.semibold))
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
-                            Text(incoming ? "Friend request" : "Friend request sent")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                            Text(
+                                incoming
+                                    ? LocalizedStringKey("Friend request") : "Friend request sent"
+                            )
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }

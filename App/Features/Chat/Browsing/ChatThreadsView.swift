@@ -38,7 +38,7 @@ struct ChatThreadsView: View {
                 onOpenThread(root)
             } label: {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(root.sender.name ?? "User \(root.sender.uid)")
+                    Text(root.sender.name ?? AppLanguage.localized("User \(root.sender.uid)"))
                         .font(.subheadline.weight(.semibold))
                     MessageSummaryText(root.replyPreview, color: .secondary, lineLimit: 2)
                     HStack {

@@ -77,7 +77,7 @@ struct SocialDirectoryView: View {
                 Text("No results").foregroundStyle(.secondary)
             }
         }
-        .navigationTitle(usersOnly ? "Add Friend" : "Directory")
+        .navigationTitle(usersOnly ? LocalizedStringKey("Add Friend") : "Directory")
         .task(id: query) {
             do {
                 try await Task.sleep(for: .milliseconds(250))

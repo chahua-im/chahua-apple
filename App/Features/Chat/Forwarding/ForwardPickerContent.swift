@@ -399,7 +399,7 @@ struct ForwardPickerContent: View {
                     } else if let preview = chat.lastMessage {
                         MessageSummaryText(preview, fontSize: 13, color: .secondary)
                     } else {
-                        Text(chat.kind == .dm ? "Direct message" : "Group")
+                        Text(chat.kind == .dm ? LocalizedStringKey("Direct message") : "Group")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

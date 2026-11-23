@@ -89,9 +89,10 @@ private struct ThreadInfoContent: View {
                         HStack(spacing: 12) {
                             AvatarView(
                                 url: user.avatarUrl.flatMap(URL.init(string:)),
-                                displayName: user.name ?? "User \(user.uid)", diameter: 40)
+                                displayName: user.name ?? AppLanguage.localized("User \(user.uid)"),
+                                diameter: 40)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(user.name ?? "User \(user.uid)")
+                                Text(user.name ?? AppLanguage.localized("User \(user.uid)"))
                                 Text("UID: \(user.uid)").font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()

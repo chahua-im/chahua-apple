@@ -84,7 +84,9 @@ struct OutgoingImageStatus: View {
                 Text(progress, format: .percent.precision(.fractionLength(0)))
             } else {
                 ProgressView().controlSize(.mini)
-                Text(attachment.preparedPath == nil ? "Processing" : "Waiting to upload")
+                Text(
+                    attachment.preparedPath == nil
+                        ? LocalizedStringKey("Processing") : "Waiting to upload")
             }
         }
         .font(.caption2)

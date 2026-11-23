@@ -114,7 +114,8 @@ struct DraftLinkPreviewManagement: View {
                     .foregroundStyle(disabled ? Color.secondary : ChahuaTheme.accent)
                     .frame(width: 36, height: 36)
             }
-            .accessibilityLabel(disabled ? "Enable link preview" : "Disable link preview")
+            .accessibilityLabel(
+                disabled ? LocalizedStringKey("Enable link preview") : "Disable link preview")
         }
         .buttonStyle(.plain)
         .padding(12)

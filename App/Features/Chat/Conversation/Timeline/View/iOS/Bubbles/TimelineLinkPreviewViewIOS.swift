@@ -103,7 +103,7 @@
             accessibilityTraits = isEnabled ? .link : .staticText
             accessibilityLabel =
                 pending
-                ? String(localized: "Loading link preview")
+                ? AppLanguage.localized("Loading link preview")
                 : [headline, preview.description, domain].compactMap { $0 }.joined(
                     separator: ", ")
             accessibilityValue = pending ? nil : preview.url

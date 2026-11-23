@@ -70,6 +70,9 @@ struct ChahuaApp: App {
                     appRoot
                 #endif
             }
+            .onChange(of: appLanguageRawValue) { _, _ in
+                pushDelegate.registerNotificationActions()
+            }
             #if os(macOS)
                 .modifier(MacConversationWindowChrome())
             #endif
@@ -81,7 +84,7 @@ struct ChahuaApp: App {
             .windowResizability(.contentMinSize)
             .conversationWindowDefaults()
             .commands {
-                MacAppUpdateCommands(updater: updater)
+                MacAppUpdateCommands(updater: updater, language: appLanguage)
             }
         #endif
     }

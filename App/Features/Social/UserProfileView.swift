@@ -56,11 +56,19 @@ struct UserProfileView: View {
         return requestContext
     }
 
-    private enum SafetyAction: String, Identifiable {
-        case remove = "Remove friend"
-        case block = "Block"
-        case unblock = "Unblock"
+    private enum SafetyAction: Identifiable {
+        case remove
+        case block
+        case unblock
         var id: Self { self }
+
+        var title: LocalizedStringKey {
+            switch self {
+            case .remove: "Remove friend"
+            case .block: "Block"
+            case .unblock: "Unblock"
+            }
+        }
     }
 
     var body: some View {
@@ -82,13 +90,13 @@ struct UserProfileView: View {
                 if phase == .active { invalidateProfile() }
             }
             .confirmationDialog(
-                confirmation?.rawValue ?? "",
+                confirmation?.title ?? "",
                 isPresented: Binding(
                     get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }
                 ), titleVisibility: .visible
             ) {
                 if let confirmation {
-                    Button(confirmation.rawValue, role: .destructive) {
+                    Button(confirmation.title, role: .destructive) {
                         Task { await performSafety(confirmation) }
                     }
                 }

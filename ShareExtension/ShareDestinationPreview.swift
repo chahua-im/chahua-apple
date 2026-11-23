@@ -26,7 +26,7 @@ private struct ShareTextPreview: View {
 
     var body: some View {
         ScrollView {
-            Text(message.isEmpty ? "No message was included." : message)
+            Text(message.isEmpty ? String(localized: "No message was included.") : message)
                 .font(.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)

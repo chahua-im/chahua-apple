@@ -62,7 +62,7 @@ struct MessageSearchView: View {
                 .pickerStyle(.inline)
             } label: {
                 HStack(spacing: 4) {
-                    Text(model.sort == .relevance ? "Best" : "Recent")
+                    Text(model.sort == .relevance ? LocalizedStringKey("Best") : "Recent")
                     Image(systemName: "chevron.down")
                         .font(.caption.weight(.semibold))
                 }
@@ -75,7 +75,9 @@ struct MessageSearchView: View {
             .buttonStyle(.plain)
             .fixedSize()
             .accessibilityLabel("Sort messages")
-            .accessibilityValue(Text(model.sort == .relevance ? "Best" : "Recent"))
+            .accessibilityValue(
+                Text(model.sort == .relevance ? LocalizedStringKey("Best") : "Recent")
+            )
             .accessibilityIdentifier("message-search-sort")
         }
         .padding(16)

@@ -363,7 +363,7 @@ private struct GroupInviteUserPicker: View {
 
 private struct GroupInviteGroupPicker: View {
     let store: ChatStore
-    let title: String
+    let title: LocalizedStringKey
     let onSelect: (SocialGroupSummary) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""

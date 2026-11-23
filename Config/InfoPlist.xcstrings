@@ -23,6 +23,12 @@
             "state" : "translated",
             "value" : "茶话"
           }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "茶話"
+          }
         }
       }
     },
@@ -32,7 +38,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Chahua"
           }
         },
@@ -41,11 +47,14 @@
             "state" : "translated",
             "value" : "茶话"
           }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "茶話"
+          }
         }
       }
-    },
-    "Chahua composer media slot" : {
-
     },
     "NSCameraUsageDescription" : {
       "comment" : "Privacy - Camera Usage Description",
@@ -101,8 +110,20 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Share and save photos and images"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分享和保存照片及图片"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分享及儲存照片與圖片"
           }
         }
       }

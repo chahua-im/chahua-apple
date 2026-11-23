@@ -188,8 +188,8 @@ final class PushNotificationCoordinator: ObservableObject {
         }
         if permitsNotifications {
             guard environment != nil else {
-                registrationError = String(
-                    localized: "Push notification environment is not configured.")
+                registrationError = AppLanguage.localized(
+                    "Push notification environment is not configured.")
                 return
             }
             registerNative()
@@ -208,8 +208,8 @@ final class PushNotificationCoordinator: ObservableObject {
                     clearRegistration()
                     registrationError = nil
                 } catch {
-                    registrationError = String(
-                        localized: "Couldn’t update notification registration. Try again.")
+                    registrationError = AppLanguage.localized(
+                        "Couldn’t update notification registration. Try again.")
                     logger.error(
                         "Push unsubscribe after permission revocation failed: \(String(describing: error), privacy: .public)"
                     )
@@ -233,8 +233,8 @@ final class PushNotificationCoordinator: ObservableObject {
             await refreshAuthorization()
         } catch {
             guard requestGeneration == generation else { return }
-            registrationError = String(
-                localized: "Couldn’t request notification permission. Try again.")
+            registrationError = AppLanguage.localized(
+                "Couldn’t request notification permission. Try again.")
         }
     }
 
@@ -279,8 +279,8 @@ final class PushNotificationCoordinator: ObservableObject {
             unregisterNative()
         } catch {
             guard generation == requestGeneration else { return }
-            registrationError = String(
-                localized: "Couldn’t update notification registration. Try again.")
+            registrationError = AppLanguage.localized(
+                "Couldn’t update notification registration. Try again.")
             logger.error("Push disable failed: \(String(describing: error), privacy: .public)")
         }
     }
@@ -339,8 +339,8 @@ final class PushNotificationCoordinator: ObservableObject {
             } catch {
                 guard !Task.isCancelled, self.generation == requestGeneration else { return }
                 self.isRegistered = false
-                self.registrationError = String(
-                    localized: "Couldn’t update notification registration. Try again.")
+                self.registrationError = AppLanguage.localized(
+                    "Couldn’t update notification registration. Try again.")
                 self.logger.error(
                     "Push subscribe failed: \(String(describing: error), privacy: .public)")
             }
@@ -377,8 +377,8 @@ final class PushNotificationCoordinator: ObservableObject {
         } catch {
             guard generation == current else { throw CancellationError() }
             isSigningOut = false
-            registrationError = String(
-                localized: "Couldn’t update notification registration. Try again.")
+            registrationError = AppLanguage.localized(
+                "Couldn’t update notification registration. Try again.")
             throw error
         }
         guard generation == current else { throw CancellationError() }

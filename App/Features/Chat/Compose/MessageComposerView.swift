@@ -150,7 +150,7 @@ struct MessageComposerView: View {
                 onPasteMedia: canAcquire ? { importProviders($0) } : nil,
                 focus: Binding(get: { isInputFocused }, set: { isInputFocused = $0 }),
                 fontSize: fontSize, maximumHeight: max(20, maxHeight - 24),
-                accessibilityLabel: "Message"
+                accessibilityLabel: AppLanguage.localized("Message")
             )
             .overlay(alignment: .topLeading) {
                 // Marked IME text is native-only until commit; the hint must still disappear.
@@ -382,7 +382,10 @@ struct MessageComposerView: View {
                                 .padding(.trailing, 6)
                             #endif
                             .disabled(!showsStickerPicker && !canPickSticker)
-                            .accessibilityLabel(showsStickerPicker ? "Close stickers" : "Stickers")
+                            .accessibilityLabel(
+                                showsStickerPicker
+                                    ? LocalizedStringKey("Close stickers") : "Stickers"
+                            )
                             .modifier(ComposerSendFocus())
                         }
                         #if os(macOS)
@@ -441,7 +444,9 @@ struct MessageComposerView: View {
                             ChatGlassSurface(
                                 shape: Circle(), isInteractive: hasContent && canSubmit)
                         )
-                        .accessibilityLabel(isEditing ? "Save changes" : "Send message")
+                        .accessibilityLabel(
+                            isEditing ? LocalizedStringKey("Save changes") : "Send message"
+                        )
                         .modifier(ComposerSendFocus())
                     }
                 }
@@ -905,9 +910,11 @@ struct MessageComposerView: View {
     private var editMarker: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(allowsEditingMedia ? "Edit queued message" : "Edit message")
-                    .font(.system(size: fontSize * 13 / 15, weight: .semibold))
-                    .foregroundStyle(ChahuaTheme.accent)
+                Text(
+                    allowsEditingMedia ? LocalizedStringKey("Edit queued message") : "Edit message"
+                )
+                .font(.system(size: fontSize * 13 / 15, weight: .semibold))
+                .foregroundStyle(ChahuaTheme.accent)
                 Text(initialEditText)
                     .font(.system(size: fontSize * 12 / 15))
                     .foregroundStyle(.secondary)

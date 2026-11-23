@@ -93,7 +93,7 @@
             let page = model.state(for: scope)
             let results = model.results(in: scope)
             return VStack(alignment: .leading, spacing: 8) {
-                Text(scope.isArchived ? "Archived chats" : "Active chats")
+                Text(scope.isArchived ? LocalizedStringKey("Archived chats") : "Active chats")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                 ForEach(results) { chat in
@@ -110,9 +110,12 @@
                                 Text(chat.chatDisplayName)
                                     .font(.headline)
                                     .lineLimit(2)
-                                Text(chat.kind == .dm ? "Direct message" : "Group")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                Text(
+                                    chat.kind == .dm
+                                        ? LocalizedStringKey("Direct message") : "Group"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
                         }

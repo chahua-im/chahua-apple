@@ -48,7 +48,10 @@ struct StickerPackSheet: View {
                             }
                             .disabled(library.pendingMutationIDs.contains(sticker.id))
                             if let pack = packDetail?.pack, pack.ownerUid != currentUserID {
-                                Button(pack.isSubscribed ? "Unsubscribe" : "Subscribe") {
+                                Button(
+                                    pack.isSubscribed
+                                        ? LocalizedStringKey("Unsubscribe") : "Subscribe"
+                                ) {
                                     Task {
                                         _ = await library.setSubscribed(
                                             !pack.isSubscribed, pack: pack)

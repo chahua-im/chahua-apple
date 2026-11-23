@@ -53,6 +53,17 @@ Third-party code that must live in-repo (patched forks, non-SPM C/C++, binary xc
 - Use a closing keyword only when the change fully resolves the issue. Use `Refs #23` for partial work.
 - Do not use `Fixes issue://23`: GitHub does not recognize that reference for automatic closure.
 
+## Localization
+
+- Ship all product text in English, Simplified Chinese (`zh-Hans`), and Traditional Chinese (`zh-Hant`). This includes menus, tooltips, accessibility labels, notifications, errors, and the share extension.
+- Use literal `LocalizedStringKey` values for SwiftUI controls and shared label parameters. A stored `String` is not automatically localized by `Text` or `Button`. Do not localize user content, server names, file names, or identifiers.
+- In the app, use `AppLanguage.localized` when an API needs a resolved `String`. Do not use `String(localized:)` there: it ignores the selected in-app resource language. The separate share extension uses its own catalog and system language.
+- Add complete Chinese translations in the owning target's `.xcstrings` catalog with each UI change. Preserve format argument types and positions; use positional arguments when the translation changes their order.
+- Remove orphaned keys when text or features are removed. Keep `push.*` keys: remote notification payloads use these keys without Swift references. Keep property-list keys only while a target's property list uses them.
+- Mark only language-neutral content with `shouldTranslate: false` and explain why in its catalog comment. Do not exempt English labels to make checks pass.
+- Run `python3 ci/check-localizations.py` before completion. The CI style stage runs this check for missing or unfinished translations, format arguments, missing source keys, and orphaned keys. Source extraction is conservative and cannot prove that every dynamic string is localized; review stored labels and custom controls as well.
+- Verify menus and related screens in both Chinese languages after an explicit Language Save. Standard operating-system menus can follow the system language.
+
 ## Design — circular controls and chips
 
 - Icon-only floating action buttons, including Jump to Bottom, must be perfect circles: equal width and height with a circular outline, background, and clipping shape. Do not substitute a squircle or a continuous rounded rectangle.

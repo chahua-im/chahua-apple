@@ -52,5 +52,5 @@ final class ShareViewController: UIViewController {
 }
 
 private struct ShareExtensionCancellationError: LocalizedError {
-    var errorDescription: String? { "Sharing was cancelled." }
+    var errorDescription: String? { String(localized: "Sharing was cancelled.") }
 }

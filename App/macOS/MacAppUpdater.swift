@@ -10,7 +10,8 @@
         @Published private(set) var canCheckForUpdates = false
 
         private let updaterController: SPUStandardUpdaterController?
-        private let unavailabilityExplanation: String?
+        // Keep the key until display so changing the app language also refreshes command help.
+        private let unavailabilityExplanation: String.LocalizationValue?
 
         init(productionServicesEnabled: Bool) {
             #if CHAHUA_SELF_UPDATE
@@ -24,8 +25,7 @@
                     NSClassFromString("XCTestCase") == nil
                 else {
                     updaterController = nil
-                    unavailabilityExplanation = String(
-                        localized: "Updates are unavailable in this build.")
+                    unavailabilityExplanation = "Updates are unavailable in this build."
                     return
                 }
 
@@ -42,10 +42,8 @@
                     let keyData = Data(base64Encoded: publicKey), keyData.count == 32
                 else {
                     updaterController = nil
-                    unavailabilityExplanation = String(
-                        localized:
-                            "Updates are unavailable because this app’s update feed or signing key is not configured."
-                    )
+                    unavailabilityExplanation =
+                        "Updates are unavailable because this app’s update feed or signing key is not configured."
                     Logger(subsystem: "app.chahua.chat", category: "updater").error(
                         "Self-update is disabled: SUFeedURL must be an HTTPS URL and SUPublicEDKey must be a base64-encoded 32-byte Ed25519 public key."
                     )
@@ -63,19 +61,18 @@
                     .assign(to: &$canCheckForUpdates)
             #else
                 updaterController = nil
-                unavailabilityExplanation = String(
-                    localized: "Updates are unavailable in this build.")
+                unavailabilityExplanation = "Updates are unavailable in this build."
             #endif
         }
 
         var help: String {
             if let unavailabilityExplanation {
-                return unavailabilityExplanation
+                return AppLanguage.localized(unavailabilityExplanation)
             }
             return canCheckForUpdates
-                ? String(localized: "Check for Updates…")
-                : String(
-                    localized: "Updates cannot be checked right now. Please try again shortly.")
+                ? AppLanguage.localized("Check for Updates…")
+                : AppLanguage.localized(
+                    "Updates cannot be checked right now. Please try again shortly.")
         }
 
         func checkForUpdates() {
@@ -86,12 +83,15 @@
 
     struct MacAppUpdateCommands: Commands {
         @ObservedObject var updater: MacAppUpdater
+        let language: AppLanguage
 
         var body: some Commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…", action: updater.checkForUpdates)
                     .disabled(!updater.canCheckForUpdates)
                     .help(updater.help)
+                    // Commands do not inherit the window content's locale environment.
+                    .environment(\.locale, language.locale)
             }
         }
     }
