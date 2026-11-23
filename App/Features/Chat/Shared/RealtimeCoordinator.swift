@@ -20,6 +20,11 @@ final class RealtimeCoordinator: ObservableObject {
     private let onInvalidToken: @MainActor @Sendable () async -> Void
     private let sleep: Sleep
     private let jitter: @Sendable () -> Double
+    private let now: () -> ContinuousClock.Instant
+    // Bound stale display state even when the socket survives in the background.
+    private static let inactiveIndicatorRetention: Duration = .seconds(60)
+    private var inactiveIndicatorDeadline: ContinuousClock.Instant?
+    private var inactiveIndicatorExpiry: Task<Void, Never>?
     private var uid: Int32?
     private var activeScenes = Set<UUID>()
     private var userIsActive = true
@@ -76,13 +81,15 @@ final class RealtimeCoordinator: ObservableObject {
         store: ChatStore,
         onInvalidToken: @escaping @MainActor @Sendable () async -> Void,
         sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
-        jitter: @escaping @Sendable () -> Double = { Double.random(in: 0...0.2) }
+        jitter: @escaping @Sendable () -> Double = { Double.random(in: 0...0.2) },
+        now: @escaping () -> ContinuousClock.Instant = { .now }
     ) {
         self.provider = provider
         self.store = store
         self.onInvalidToken = onInvalidToken
         self.sleep = sleep
         self.jitter = jitter
+        self.now = now
         presenceObservation = Publishers.Merge(
             store.presenceScopeChanges,
             store.presencePrivacyInvalidations
@@ -146,6 +153,7 @@ final class RealtimeCoordinator: ObservableObject {
         if active { activeScenes.insert(id) } else { activeScenes.remove(id) }
         let isActive = !activeScenes.isEmpty
         guard wasActive != isActive else { return }
+        updateInactiveIndicatorRetention(active: isActive)
         store.setForegroundActive(isActive)
         if previousAppState != appState, let connection {
             enqueuePresence(
@@ -171,6 +179,26 @@ final class RealtimeCoordinator: ObservableObject {
             recovery?.cancel()
             recovery = nil
             store.cancelRealtimeRecovery()
+        }
+    }
+
+    private func updateInactiveIndicatorRetention(active: Bool) {
+        inactiveIndicatorExpiry?.cancel()
+        inactiveIndicatorExpiry = nil
+        if active {
+            // Check synchronously: iOS can resume before a suspended timer runs.
+            if let deadline = inactiveIndicatorDeadline, now() >= deadline {
+                store.expireInactiveIndicators()
+            }
+            inactiveIndicatorDeadline = nil
+        } else {
+            inactiveIndicatorDeadline = now().advanced(by: Self.inactiveIndicatorRetention)
+            inactiveIndicatorExpiry = Task { [weak self, sleep] in
+                do { try await sleep(Self.inactiveIndicatorRetention) } catch { return }
+                guard let self, !Task.isCancelled, self.activeScenes.isEmpty else { return }
+                self.store.expireInactiveIndicators()
+                self.inactiveIndicatorExpiry = nil
+            }
         }
     }
 
@@ -513,6 +541,9 @@ final class RealtimeCoordinator: ObservableObject {
         pendingSend?.cancel()
         pongDeadline?.cancel()
         recovery?.cancel()
+        inactiveIndicatorExpiry?.cancel()
+        inactiveIndicatorExpiry = nil
+        inactiveIndicatorDeadline = nil
         presenceWatchTask?.cancel()
         presenceWatchTask = nil
         hasPresenceWatch = false

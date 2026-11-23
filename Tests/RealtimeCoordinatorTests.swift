@@ -677,7 +677,7 @@ final class RealtimeCoordinatorTests: XCTestCase {
         coordinator.setSession(uid: 1)
         defer { coordinator.setSession(uid: nil) }
         let consumer = UUID()
-        store.setPresenceScope(PresenceScope(userIDs: [2]), for: consumer)
+        store.setPresenceScope(PresenceScope(userIDs: [2], chatIDs: ["7"]), for: consumer)
         await eventually { await first.latestWatch?.userIDs == [2] }
         let firstWatch = await first.latestWatch
         let firstID = try XCTUnwrap(firstWatch?.requestID)
@@ -696,16 +696,42 @@ final class RealtimeCoordinatorTests: XCTestCase {
         let secondWatch = await second.latestWatch
         let secondID = try XCTUnwrap(secondWatch?.requestID)
         XCTAssertGreaterThan(secondID, firstID)
+        let user = UserPresenceResponse(uid: 2, online: true)
+        let group = GroupPresenceResponse(chatId: "7", memberCount: 8, onlineCount: 3)
+        await second.emit(
+            .presenceSnapshot(
+                .init(requestId: secondID, users: [user], groups: [group])))
+        await eventually { store.state.groupPresence["7"]?.onlineCount == 3 }
 
         coordinator.setSceneActive(id: scene, active: false)
         await eventually { await second.latestWatch?.userIDs == [] }
+        XCTAssertEqual(store.state.userPresence[2], user)
+        XCTAssertEqual(store.state.groupPresence["7"], group)
+        // Neither the old request nor the empty unsubscribe can replace retained state.
+        let inactiveWatch = await second.latestWatch
+        let inactiveID = try XCTUnwrap(inactiveWatch?.requestID)
+        for requestID in [secondID, inactiveID] {
+            await store.applyRealtimeEvent(
+                .presenceSnapshot(.init(requestId: requestID, users: [], groups: [])),
+                currentUserID: 1)
+        }
+        XCTAssertEqual(store.state.userPresence[2], user)
+        XCTAssertEqual(store.state.groupPresence["7"], group)
         // A UI disappearance while inactive must not cancel the queued unsubscribe.
         store.removePresenceScope(for: consumer)
-        store.setPresenceScope(PresenceScope(userIDs: [2]), for: consumer)
+        store.setPresenceScope(PresenceScope(userIDs: [2], chatIDs: ["7"]), for: consumer)
         coordinator.setSceneActive(id: scene, active: true)
         await eventually { await second.latestWatch?.userIDs == [2] }
         let resumed = await second.latestWatch
         XCTAssertGreaterThan(try XCTUnwrap(resumed?.requestID), secondID)
+        XCTAssertEqual(store.state.userPresence[2], user)
+        XCTAssertEqual(store.state.groupPresence["7"], group)
+        await second.emit(
+            .presenceSnapshot(
+                .init(requestId: try XCTUnwrap(resumed?.requestID), users: [], groups: [])))
+        await eventually {
+            store.state.userPresence.isEmpty && store.state.groupPresence.isEmpty
+        }
         coordinator.setSession(uid: nil)
         XCTAssertTrue(store.presenceScope.isEmpty)
         XCTAssertTrue(store.state.userPresence.isEmpty)
@@ -1621,21 +1647,44 @@ final class RealtimeCoordinatorTests: XCTestCase {
         await eventually { await socket.unreadWatches.last?.appBadge == true }
         let initialWatch = await socket.unreadWatches.last
         let initial = try XCTUnwrap(initialWatch)
+        let summary = ConversationUnreadSummary(
+            key: "messages-with-threads-archived", unreadAttentionCount: 1,
+            unreadConversationCount: 8, unreadMessageCount: 12,
+            unreadUnmutedAttentionCount: 0, unreadUnmutedConversationCount: 0,
+            unreadUnmutedMessageCount: 0)
         await socket.emit(
             .conversationUnread(
-                .init(requestId: initial.requestID, full: true, summaries: [], appBadgeCount: 7)))
-        await eventually { store.state.unreadBadgeCount() == 7 }
+                .init(
+                    requestId: initial.requestID, full: true, summaries: [summary],
+                    appBadgeCount: 7)))
+        await eventually { store.state.conversationUnreadSummaries == [summary] }
+        XCTAssertEqual(
+            ConversationTabBadges(
+                summaries: store.state.conversationUnreadSummaries, archived: true
+            ).archiveEntryLabel(for: .messages), "8")
         let requestsBefore = await api.chatRequestCount
 
         coordinator.setSceneActive(id: scene, active: false)
         await eventually { await socket.unreadWatches.last?.requestID != initial.requestID }
         let backgroundWatch = await socket.unreadWatches.last
         let backgroundID = try XCTUnwrap(backgroundWatch?.requestID)
+        await store.applyRealtimeEvent(
+            .conversationUnread(
+                .init(requestId: backgroundID, full: true, summaries: [], appBadgeCount: 6)),
+            currentUserID: 1)
+        XCTAssertEqual(store.state.conversationUnreadSummaries, [summary])
+        XCTAssertEqual(store.state.appBadgeCount, 6)
         coordinator.setSceneActive(id: scene, active: true)
         await eventually { await socket.unreadWatches.last?.requestID != backgroundID }
         let resumedWatch = await socket.unreadWatches.last
         let resumed = try XCTUnwrap(resumedWatch)
         XCTAssertGreaterThan(resumed.requestID, initial.requestID)
+        XCTAssertEqual(store.state.conversationUnreadSummaries, [summary])
+        await store.applyRealtimeEvent(
+            .conversationUnread(
+                .init(requestId: backgroundID, full: true, summaries: [], appBadgeCount: 99)),
+            currentUserID: 1)
+        XCTAssertEqual(store.state.conversationUnreadSummaries, [summary])
         await socket.emit(
             .conversationUnread(
                 .init(requestId: initial.requestID, full: true, summaries: [], appBadgeCount: 99)))
@@ -1643,8 +1692,94 @@ final class RealtimeCoordinatorTests: XCTestCase {
             .conversationUnread(
                 .init(requestId: resumed.requestID, full: true, summaries: [], appBadgeCount: 4)))
         await eventually { store.state.unreadBadgeCount() == 4 }
+        XCTAssertTrue(
+            store.state.conversationUnreadSummaries.isEmpty,
+            "A valid foreground snapshot must remove omitted archive summaries.")
         let requestsAfter = await api.chatRequestCount
         XCTAssertEqual(requestsAfter, requestsBefore, "Healthy resume must not reload list pages.")
+    }
+
+    func testExtendedInterruptionExpiresIndicatorsBeforeSuspendedTimerResumes() async throws {
+        let api = RealtimeTestHTTP()
+        let socket = RealtimeTestSocket()
+        let clock = RealtimeTestClock()
+        var now = ContinuousClock.now
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [socket]), store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 }, now: { now })
+        let scene = UUID()
+        coordinator.setSceneActive(id: scene, active: true)
+        coordinator.setSession(uid: 1)
+        defer { coordinator.setSession(uid: nil) }
+        store.setPresenceScope(.init(userIDs: [2], chatIDs: ["7"]), for: UUID())
+        await eventually { await socket.latestWatch?.userIDs == [2] }
+        await eventually { await socket.unreadWatches.last != nil }
+        let presenceWatch = await socket.latestWatch
+        let unreadWatch = await socket.unreadWatches.last
+        let presenceID = try XCTUnwrap(presenceWatch?.requestID)
+        let unreadID = try XCTUnwrap(unreadWatch?.requestID)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                .init(
+                    requestId: presenceID, users: [.init(uid: 2, online: true)],
+                    groups: [.init(chatId: "7", memberCount: 8, onlineCount: 3)])),
+            currentUserID: 1)
+        let summary = ConversationUnreadSummary(
+            key: "messages-with-threads-archived", unreadAttentionCount: 0,
+            unreadConversationCount: 8, unreadMessageCount: 12,
+            unreadUnmutedAttentionCount: 0, unreadUnmutedConversationCount: 0,
+            unreadUnmutedMessageCount: 0)
+        await store.applyRealtimeEvent(
+            .conversationUnread(
+                .init(
+                    requestId: unreadID, full: true, summaries: [summary], appBadgeCount: 7,
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 1)]))),
+            currentUserID: 1)
+        coordinator.setSceneActive(id: scene, active: false)
+        await eventually { await clock.hasSleep(seconds: 60) }
+        XCTAssertEqual(store.state.userPresence[2]?.online, true)
+        XCTAssertEqual(store.state.conversationUnreadSummaries, [summary])
+        // Advance only the monotonic clock, leaving the expiry task suspended.
+        now = now.advanced(by: .seconds(61))
+        coordinator.setSceneActive(id: scene, active: true)
+        XCTAssertTrue(store.state.userPresence.isEmpty)
+        XCTAssertTrue(store.state.groupPresence.isEmpty)
+        XCTAssertTrue(store.state.conversationUnreadSummaries.isEmpty)
+        XCTAssertNil(store.state.mainUnread)
+        XCTAssertEqual(store.state.appBadgeCount, 7)
+    }
+
+    func testBackgroundRetentionTimerExpiresPresenceWithoutWaitingForFocus() async throws {
+        let api = RealtimeTestHTTP()
+        let socket = RealtimeTestSocket()
+        let clock = RealtimeTestClock()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [socket]), store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        let scene = UUID()
+        coordinator.setSceneActive(id: scene, active: true)
+        coordinator.setSession(uid: 1)
+        defer { coordinator.setSession(uid: nil) }
+        store.setPresenceScope(.init(userIDs: [2]), for: UUID())
+        await eventually { await socket.latestWatch?.userIDs == [2] }
+        let watch = await socket.latestWatch
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                .init(
+                    requestId: try XCTUnwrap(watch?.requestID),
+                    users: [.init(uid: 2, online: true)], groups: [])),
+            currentUserID: 1)
+        coordinator.setSceneActive(id: scene, active: false)
+        await eventually { await clock.hasSleep(seconds: 60) }
+        XCTAssertEqual(store.state.userPresence[2]?.online, true)
+        await clock.advance(seconds: 60)
+        await eventually { store.state.userPresence.isEmpty }
     }
 
     #if os(macOS)
