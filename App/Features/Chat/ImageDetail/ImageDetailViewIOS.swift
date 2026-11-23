@@ -625,6 +625,10 @@
                         guard let self, self.selectedIndex == index else { return }
                         self.updateVideoChrome()
                     }
+                    videoPage.onFullScreenChromeChanged = { [weak self] in
+                        guard let self, self.selectedIndex == index else { return }
+                        self.updateVideoChrome()
+                    }
                     page = videoPage
                 } else {
                     let imagePage = ImageDetailImagePageIOS(
@@ -722,6 +726,17 @@
         }
 
         private func updateVideoChrome(reveal: Bool = false) {
+            if let hidden = (pages[selectedIndex] as? ImageDetailVideoPageIOS)?
+                .fullScreenNavigationHidden
+            {
+                // AVKit presents another controller, so canInteract is false during
+                // fullscreen playback. Follow its page's chrome state instead of
+                // treating that presentation as a reason to keep gallery navigation up.
+                videoChromeTask?.cancel()
+                videoChromeTask = nil
+                setVideoChromeHidden(hidden)
+                return
+            }
             if reveal || !canHideVideoChrome {
                 videoChromeTask?.cancel()
                 videoChromeTask = nil

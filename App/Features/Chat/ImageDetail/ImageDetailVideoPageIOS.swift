@@ -59,6 +59,11 @@
         private var playbackHandoffGeneration = 0
         var mayInteract: (() -> Bool)?
         var onPlaybackChanged: (() -> Void)?
+        var onFullScreenChromeChanged: (() -> Void)?
+        /// Nil leaves inline gallery navigation under the viewer's own timer.
+        var fullScreenNavigationHidden: Bool? {
+            presentingFullScreen ? fullScreenChromeHidden : nil
+        }
         private(set) var isLoopEnabled = true
 
         var isPlaying: Bool {
@@ -204,6 +209,7 @@
             interactionObserver.onKeyboardInteraction = nil
             interactionObserver.view?.removeGestureRecognizer(interactionObserver)
             onPlaybackChanged = nil
+            onFullScreenChromeChanged = nil
             mayInteract = nil
         }
 
@@ -585,6 +591,7 @@
                 fullScreenChromeHidden = false
             }
             loopButton.isHidden = !presentingFullScreen || fullScreenChromeHidden
+            onFullScreenChromeChanged?()
             guard canHideFullScreenChrome, !fullScreenChromeHidden, fullScreenChromeTask == nil
             else { return }
             fullScreenChromeTask = Task { [weak self] in
@@ -604,6 +611,7 @@
                 }
                 self.fullScreenChromeHidden = true
                 self.loopButton.isHidden = true
+                self.onFullScreenChromeChanged?()
             }
         }
 
