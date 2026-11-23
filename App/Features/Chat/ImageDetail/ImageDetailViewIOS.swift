@@ -49,7 +49,7 @@
         private let titlePill = UIVisualEffectView(effect: nil)
         private let titleLabel = UILabel()
         private let sentAtLabel = UILabel()
-        private let moreButton = UIButton(type: .system)
+        private let moreButton = ImageDetailMenuButtonIOS(type: .system)
         private let countLabel = UILabel()
         private let feedbackPill = UIVisualEffectView(
             effect: UIBlurEffect(style: .systemMaterialDark))
@@ -59,13 +59,15 @@
         private lazy var dismissPan = UIPanGestureRecognizer(
             target: self, action: #selector(dragToDismiss(_:)))
         private var pages: [Int: any ImageDetailPageContentIOS] = [:]
-        /// Extra safe-area insets that keep AVKit's controls clear of the viewer's header and
-        /// page indicator; the viewer's chrome stays visible over video pages.
+        /// Reserve stable AVKit transport geometry as gallery navigation fades, so revealing
+        /// the gallery does not move the native controls beneath an ongoing interaction.
         private var playerControlInsets = UIEdgeInsets.zero
         private var selectedIndex: Int
         private var viewportSize = CGSize.zero
         private var appeared = false
         private var isVisible = false
+        private var presentationHandoffInFlight = false
+        private var presentationHandoffGeneration = 0
         private var applicationIsActive = true
         private var isPaging = false
         private var isTransitioning = true
@@ -75,6 +77,16 @@
         private var dismissalDelivered = false
         private var isTornDown = false
 
+        private let interactionObserver = ImageDetailVideoInteractionIOS()
+        private var videoChromeTask: Task<Void, Never>?
+        private var videoChromeHidden = false
+        private var chromeTouchActive = false
+        private var menuVisible = false
+        private var keyboardActive = false
+        private var hasKeyboardFocus = false
+        private lazy var autoHidingChrome: [UIView] = [
+            backButton, titlePill, moreButton, countLabel, previousButton, nextButton,
+        ]
         private enum SaveResult {
             case saved(itemID: String, fileName: String, isVideo: Bool)
             case failed(String, isVideo: Bool)
@@ -169,6 +181,37 @@
             dismissPan.delegate = self
             dismissPan.maximumNumberOfTouches = 1
             view.addGestureRecognizer(dismissPan)
+            interactionObserver.onBegan = { [weak self] _ in
+                guard let self else { return false }
+                let consume = self.videoChromeHidden
+                self.chromeTouchActive = true
+                self.updateVideoChrome(reveal: true)
+                return consume
+            }
+            interactionObserver.onEnded = { [weak self] in
+                guard let self else { return }
+                self.chromeTouchActive = false
+                self.updateVideoChrome()
+            }
+            interactionObserver.onKeyboardInteraction = { [weak self] in
+                guard let self else { return }
+                self.keyboardActive = self.interactionObserver.keyboardActive
+                self.updateVideoChrome(reveal: true)
+            }
+            view.addGestureRecognizer(interactionObserver)
+            moreButton.onMenuVisibilityChanged = { [weak self] visible in
+                guard let self else { return }
+                self.menuVisible = visible
+                self.updateVideoChrome(reveal: true)
+            }
+            for name in [
+                UIAccessibility.switchControlStatusDidChangeNotification,
+                UIAccessibility.assistiveTouchStatusDidChangeNotification,
+                UIAccessibility.elementFocusedNotification,
+            ] {
+                NotificationCenter.default.addObserver(
+                    self, selector: #selector(accessibilityChanged), name: name, object: nil)
+            }
             NotificationCenter.default.addObserver(
                 self, selector: #selector(accessibilityChanged),
                 name: UIAccessibility.voiceOverStatusDidChangeNotification, object: nil)
@@ -188,6 +231,8 @@
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
             guard !isTornDown else { return }
+            presentationHandoffGeneration += 1
+            presentationHandoffInFlight = false
             isVisible = true
             updatePageStates()
             guard !appeared else { return }
@@ -216,7 +261,33 @@
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
             isVisible = false
+            presentationHandoffGeneration += 1
+            let generation = presentationHandoffGeneration
+            // UIKit reports gallery disappearance before AVKit's full-screen delegate.
+            // Keep the existing playback intent through that public transition boundary;
+            // the delegate can claim playback before completion, without a compensating
+            // play() that could override a pause. Explicit close/background/page-out still
+            // stop immediately through their existing state checks.
+            guard applicationIsActive, !dismissalStarted, !isBeingDismissed,
+                parent?.isBeingDismissed != true, let coordinator = transitionCoordinator
+            else {
+                presentationHandoffInFlight = false
+                updatePageStates()
+                return
+            }
+            presentationHandoffInFlight = true
             updatePageStates()
+            let registered = coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+                guard let self, self.presentationHandoffGeneration == generation,
+                    !self.isTornDown
+                else { return }
+                self.presentationHandoffInFlight = false
+                self.updatePageStates()
+            }
+            if !registered {
+                presentationHandoffInFlight = false
+                updatePageStates()
+            }
         }
 
         override func viewDidLayoutSubviews() {
@@ -301,6 +372,35 @@
             updatePageStates()
         }
 
+        override func didUpdateFocus(
+            in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator
+        ) {
+            super.didUpdateFocus(in: context, with: coordinator)
+            hasKeyboardFocus = context.nextFocusedView?.isDescendant(of: view) == true
+            updateVideoChrome(reveal: true)
+        }
+
+        override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            keyboardActive = true
+            updateVideoChrome(reveal: true)
+            if presses.contains(where: { $0.key?.keyCode == .keyboardEscape }), requestClose() {
+                return
+            }
+            super.pressesBegan(presses, with: event)
+        }
+
+        override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            super.pressesEnded(presses, with: event)
+            keyboardActive = false
+            updateVideoChrome()
+        }
+
+        override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            super.pressesCancelled(presses, with: event)
+            keyboardActive = false
+            updateVideoChrome()
+        }
+
         override func viewWillTransition(
             to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator
         ) {
@@ -332,6 +432,14 @@
             guard !isTornDown else { return }
             isTornDown = true
             isVisible = false
+            presentationHandoffGeneration += 1
+            presentationHandoffInFlight = false
+            videoChromeTask?.cancel()
+            videoChromeTask = nil
+            interactionObserver.onBegan = nil
+            interactionObserver.onEnded = nil
+            interactionObserver.onKeyboardInteraction = nil
+            moreButton.onMenuVisibilityChanged = nil
             saveTask?.cancel()
             saveTask = nil
             deferredSaveResult = nil
@@ -436,7 +544,11 @@
                         return
                     }
                     let isVideo = self.gallery.items[self.selectedIndex].isVideo
-                    completion([
+                    var actions: [UIMenuElement] = []
+                    if let videoPage = self.pages[self.selectedIndex] as? ImageDetailVideoPageIOS {
+                        actions.append(videoPage.makeLoopAction())
+                    }
+                    actions.append(
                         UIAction(
                             title: isVideo
                                 ? AppLanguage.localized("Save Video")
@@ -444,8 +556,8 @@
                             image: UIImage(systemName: "square.and.arrow.down")
                         ) { [weak self] _ in
                             self?.saveSelectedItem()
-                        }
-                    ])
+                        })
+                    completion(actions)
                 }
             ])
             moreButton.showsMenuAsPrimaryAction = true
@@ -507,8 +619,13 @@
                 let page: any ImageDetailPageContentIOS
                 let userInitiated = index == gallery.selectedIndex
                 if item.isVideo {
-                    page = ImageDetailVideoPageIOS(
+                    let videoPage = ImageDetailVideoPageIOS(
                         item: item, mediaContext: mediaContext, userInitiated: userInitiated)
+                    videoPage.onPlaybackChanged = { [weak self] in
+                        guard let self, self.selectedIndex == index else { return }
+                        self.updateVideoChrome()
+                    }
+                    page = videoPage
                 } else {
                     let imagePage = ImageDetailImagePageIOS(
                         item: item, mediaContext: mediaContext, userInitiated: userInitiated)
@@ -544,7 +661,8 @@
                 let intersectsViewport =
                     page.frame.intersects(pager.bounds) && viewportSize.width > 0
                 let visible =
-                    isVisible && applicationIsActive && !dismissalStarted && intersectsViewport
+                    (isVisible || presentationHandoffInFlight) && applicationIsActive
+                    && !dismissalStarted && intersectsViewport
                 page.setPresentation(
                     visible: visible,
                     selected: index == selectedIndex,
@@ -559,6 +677,7 @@
             previousButton.isEnabled = canInteract && currentIsFit && selectedIndex > 0
             nextButton.isEnabled =
                 canInteract && currentIsFit && selectedIndex + 1 < gallery.items.count
+            updateVideoChrome()
         }
 
         private func updateChrome() {
@@ -592,9 +711,62 @@
             nextButton.isHidden = !showsPagingButtons
             updateMoreButtonConfiguration()
             updatePageStates()
+            updateVideoChrome(reveal: true)
         }
 
-        @objc private func accessibilityChanged() { updateChrome() }
+        private var canHideVideoChrome: Bool {
+            canInteract && (pages[selectedIndex] as? ImageDetailVideoPageIOS)?.isPlaying == true
+                && !chromeTouchActive && !menuVisible && !keyboardActive && !hasKeyboardFocus
+                && !isSaving && feedbackDismissTask == nil
+                && !ImageDetailVideoPageIOS.accessibilityKeepsChromeVisible
+        }
+
+        private func updateVideoChrome(reveal: Bool = false) {
+            if reveal || !canHideVideoChrome {
+                videoChromeTask?.cancel()
+                videoChromeTask = nil
+                setVideoChromeHidden(false)
+            }
+            guard canHideVideoChrome, !videoChromeHidden, videoChromeTask == nil else { return }
+            videoChromeTask = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                guard !Task.isCancelled, let self else { return }
+                self.videoChromeTask = nil
+                guard self.canHideVideoChrome else { return }
+                guard self.presentedViewController == nil,
+                    self.pages[self.selectedIndex]?.childViewController?.presentedViewController
+                        == nil
+                else {
+                    self.updateVideoChrome()
+                    return
+                }
+                self.setVideoChromeHidden(true)
+            }
+        }
+
+        private func setVideoChromeHidden(_ hidden: Bool) {
+            guard videoChromeHidden != hidden else { return }
+            videoChromeHidden = hidden
+            for element in autoHidingChrome {
+                element.isUserInteractionEnabled = !hidden
+                element.accessibilityElementsHidden = hidden
+            }
+            let change = {
+                for element in self.autoHidingChrome { element.alpha = hidden ? 0 : 1 }
+            }
+            if UIAccessibility.isReduceMotionEnabled || !isVisible {
+                change()
+            } else {
+                UIView.animate(
+                    withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .curveEaseOut],
+                    animations: change)
+            }
+        }
+
+        @objc private func accessibilityChanged() {
+            updateChrome()
+            updateVideoChrome(reveal: true)
+        }
         @objc private func applicationResignedActive() {
             applicationIsActive = false
             updatePageStates()
@@ -689,6 +861,7 @@
             view.setNeedsLayout()
             view.layoutIfNeeded()
 
+            updateVideoChrome(reveal: true)
             let show = { self.feedbackPill.alpha = 1 }
             if UIAccessibility.isReduceMotionEnabled {
                 show()
@@ -713,6 +886,7 @@
             guard !isTornDown else { return }
             feedbackDismissTask = nil
             feedbackPill.accessibilityElementsHidden = true
+            updateVideoChrome()
             let hide = { self.feedbackPill.alpha = 0 }
             if UIAccessibility.isReduceMotionEnabled {
                 hide()
@@ -948,6 +1122,35 @@
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
             let hit = super.hitTest(point, with: event)
             return hit === self ? nil : hit
+        }
+    }
+
+    /// Keep our navigation visible for the entire menu session, not just its opening tap.
+    @MainActor
+    private final class ImageDetailMenuButtonIOS: UIButton {
+        var onMenuVisibilityChanged: ((Bool) -> Void)?
+
+        override func contextMenuInteraction(
+            _ interaction: UIContextMenuInteraction,
+            willDisplayMenuFor configuration: UIContextMenuConfiguration,
+            animator: (any UIContextMenuInteractionAnimating)?
+        ) {
+            super.contextMenuInteraction(
+                interaction, willDisplayMenuFor: configuration, animator: animator)
+            onMenuVisibilityChanged?(true)
+        }
+
+        override func contextMenuInteraction(
+            _ interaction: UIContextMenuInteraction,
+            willEndFor configuration: UIContextMenuConfiguration,
+            animator: (any UIContextMenuInteractionAnimating)?
+        ) {
+            super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
+            if let animator {
+                animator.addCompletion { [weak self] in self?.onMenuVisibilityChanged?(false) }
+            } else {
+                onMenuVisibilityChanged?(false)
+            }
         }
     }
 

@@ -17,6 +17,17 @@
         enum State: Equatable { case idle, loading, ready, notDownloaded, failed }
 
         var onStateChanged: ((State) -> Void)?
+        var onPlaybackChanged: (() -> Void)?
+        var loopEnabled = true {
+            didSet {
+                player?.actionAtItemEnd = loopEnabled ? AVPlayer.ActionAtItemEnd.none : .pause
+                if !loopEnabled, loopSeekID != nil { interruptPlayback() }
+            }
+        }
+        var isPlaying: Bool {
+            isActive && applicationIsActive && window != nil && state == .ready
+                && (player?.rate ?? 0) > 0 && player?.timeControlStatus != .paused
+        }
         private(set) var state = State.idle
         let playerView = AVPlayerView()
 
@@ -36,6 +47,7 @@
         private var isActive = false
         private var applicationIsActive = NSApp.isActive
         private var autoplayPending = false
+        private var loopSeekID: UUID?
 
         override var isFlipped: Bool { true }
 
@@ -81,13 +93,14 @@
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            if window == nil { autoplayPending = false }
             applyPlayback()
         }
 
         private func applyPlayback() {
             guard isActive, applicationIsActive, window != nil else {
                 cancelDownload()
-                player?.pause()
+                interruptPlayback()
                 return
             }
             if player == nil, downloadTask == nil, state == .idle { load() }
@@ -119,7 +132,7 @@
         func togglePlayback() {
             guard isActive, applicationIsActive, let player, state != .failed else { return }
             if player.rate != 0 {
-                player.pause()
+                interruptPlayback()
                 return
             }
             if let item = player.currentItem, item.duration.isNumeric,
@@ -129,6 +142,31 @@
             }
             VoicePlaybackController.stopAll()
             player.play()
+        }
+
+        // Never restart from a seek completion. With `.none`, an end seek retains the
+        // existing playing rate; a native pause during that seek therefore stays paused.
+        private func repeatCurrentItem(_ item: AVPlayerItem) {
+            guard loopEnabled, isActive, applicationIsActive, window != nil,
+                state == .ready, let player, player.currentItem === item, player.rate > 0,
+                loopSeekID == nil
+            else { return }
+            let id = UUID()
+            loopSeekID = id
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) {
+                [weak self, weak player] _ in
+                Task { @MainActor in
+                    guard let self, self.player === player, self.loopSeekID == id else { return }
+                    self.loopSeekID = nil
+                }
+            }
+        }
+
+        private func interruptPlayback() {
+            loopSeekID = nil
+            player?.currentItem?.cancelPendingSeeks()
+            player?.pause()
+            onPlaybackChanged?()
         }
 
         /// Stops playback and releases the item and player; the page is being discarded.
@@ -210,17 +248,26 @@
             let item = AVPlayerItem(url: url)
             let player = AVPlayer(playerItem: item)
             self.player = player
+            player.actionAtItemEnd = loopEnabled ? .none : .pause
             playerView.player = player
             playerView.isHidden = false
             progressView.update(.indeterminate)
             // AVKit can also start the player from its native inline controls.
             player.publisher(for: \.timeControlStatus)
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self, weak player] status in
-                    guard let self, let player, self.player === player,
-                        status != .paused, player.timeControlStatus != .paused
-                    else { return }
-                    VoicePlaybackController.stopAll()
+                .sink { [weak self, weak player] _ in
+                    guard let self, let player, self.player === player else { return }
+                    if player.timeControlStatus != .paused {
+                        guard self.isActive, self.applicationIsActive, self.window != nil else {
+                            self.interruptPlayback()
+                            return
+                        }
+                        VoicePlaybackController.stopAll()
+                    } else if self.loopSeekID != nil {
+                        self.loopSeekID = nil
+                        player.currentItem?.cancelPendingSeeks()
+                    }
+                    self.onPlaybackChanged?()
                 }
                 .store(in: &itemSubscriptions)
             item.publisher(for: \.status)
@@ -245,6 +292,15 @@
                 }
                 .store(in: &itemSubscriptions)
             NotificationCenter.default.publisher(
+                for: AVPlayerItem.didPlayToEndTimeNotification, object: item
+            )
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak item] _ in
+                guard let self, let item else { return }
+                self.repeatCurrentItem(item)
+            }
+            .store(in: &itemSubscriptions)
+            NotificationCenter.default.publisher(
                 for: AVPlayerItem.failedToPlayToEndTimeNotification, object: item
             )
             .receive(on: DispatchQueue.main)
@@ -265,7 +321,7 @@
 
         private func releasePlayer() {
             itemSubscriptions.removeAll()
-            player?.pause()
+            interruptPlayback()
             player?.replaceCurrentItem(with: nil)
             playerView.player = nil
             player = nil
@@ -275,7 +331,7 @@
 
         private func update(_ newState: State) {
             if newState == .failed {
-                player?.pause()
+                interruptPlayback()
                 if let fileLease, let videoCache {
                     Task { await videoCache.invalidate(fileLease) }
                 }

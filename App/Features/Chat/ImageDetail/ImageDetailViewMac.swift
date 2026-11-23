@@ -49,6 +49,16 @@
         private let chrome = MessageImageDetailMacContainer()
         private let closeButton = NSButton()
         private let moreButton = NSButton()
+        private let loopButton = NSButton()
+        private var loopEnabled = true
+        private var chromeIsHidden = false
+        private var chromeHideTask: Task<Void, Never>?
+        private var interactionMonitor: Any?
+        private var interactionTrackingArea: NSTrackingArea?
+        private var suppressedMouseButton: Int?
+        private var menuIsTracking = false
+        private var accessibilityInteractionObservation: AnyCancellable?
+        private var keyboardInteraction = false
         private let headerBackground: NSView = {
             if #available(macOS 26, *) {
                 let glass = NSGlassEffectView()
@@ -141,6 +151,11 @@
             configureButton(
                 moreButton, symbol: "ellipsis", label: AppLanguage.localized("More"),
                 action: #selector(showImageMenu))
+            configureButton(
+                loopButton, symbol: "repeat", label: AppLanguage.localized("Loop"),
+                action: #selector(toggleLoop))
+            loopButton.setButtonType(.toggle)
+            loopButton.state = .on
             // This viewer already owns native gestures and buttons. Keep its floating
             // chrome native too, with transparent content inside the system glass.
             if #available(macOS 26, *), let glass = headerBackground as? NSGlassEffectView {
@@ -196,13 +211,26 @@
             toastBackground.addSubview(toastLabel)
             chrome.addSubview(toastBackground)
             closeButton.nextKeyView = moreButton
-            moreButton.nextKeyView = previousButton
+            moreButton.nextKeyView = loopButton
+            loopButton.nextKeyView = previousButton
             previousButton.nextKeyView = nextButton
             nextButton.nextKeyView = closeButton
 
             NSWorkspace.shared.notificationCenter.addObserver(
                 self, selector: #selector(accessibilityOptionsChanged),
                 name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(menuTrackingBegan),
+                name: NSMenu.didBeginTrackingNotification, object: nil)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(menuTrackingEnded),
+                name: NSMenu.didEndTrackingNotification, object: nil)
+            accessibilityInteractionObservation = Publishers.CombineLatest(
+                NSWorkspace.shared.publisher(for: \.isVoiceOverEnabled),
+                NSWorkspace.shared.publisher(for: \.isSwitchControlEnabled)
+            )
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.noteInteraction() }
             refreshPages()
         }
 
@@ -210,6 +238,9 @@
 
         deinit {
             NSWorkspace.shared.notificationCenter.removeObserver(self)
+            NotificationCenter.default.removeObserver(self)
+            chromeHideTask?.cancel()
+            if let interactionMonitor { NSEvent.removeMonitor(interactionMonitor) }
             wheelEndTask?.cancel()
             saveTask?.cancel()
             toastDismissTask?.cancel()
@@ -223,6 +254,8 @@
             previousFirstResponder = window.firstResponder
             window.makeFirstResponder(self)
             layoutSubtreeIfNeeded()
+            installInteractionMonitor()
+            scheduleChromeHide()
             if !reduceMotion {
                 alphaValue = 0
                 NSAnimationContext.runAnimationGroup { animation in
@@ -233,7 +266,13 @@
         }
 
         override func viewWillMove(toWindow newWindow: NSWindow?) {
-            if newWindow == nil { restoreFocus() }
+            if newWindow == nil {
+                chromeHideTask?.cancel()
+                chromeHideTask = nil
+                if let interactionMonitor { NSEvent.removeMonitor(interactionMonitor) }
+                interactionMonitor = nil
+                restoreFocus()
+            }
             super.viewWillMove(toWindow: newWindow)
         }
 
@@ -241,6 +280,11 @@
             guard !isInvalidated else { return }
             restoreFocus()
             isInvalidated = true
+            chromeHideTask?.cancel()
+            chromeHideTask = nil
+            if let interactionMonitor { NSEvent.removeMonitor(interactionMonitor) }
+            interactionMonitor = nil
+            NotificationCenter.default.removeObserver(self)
             animationGeneration += 1
             wheelEndTask?.cancel()
             wheelEndTask = nil
@@ -321,6 +365,14 @@
                         item: gallery.items[index], mediaContext: mediaContext,
                         userInitiated: index == gallery.selectedIndex)
                     page.onZoomChanged = { [weak self] in self?.updateControls() }
+                    page.videoView?.loopEnabled = loopEnabled
+                    page.videoView?.onPlaybackChanged = { [weak self] in
+                        guard let self, self.selectedIndex == index else { return }
+                        if self.activePage?.videoView?.isPlaying != true {
+                            self.setChromeHidden(false)
+                        }
+                        self.scheduleChromeHide()
+                    }
                     page.onRetry = { [weak self] in
                         guard let self else { return }
                         self.window?.makeFirstResponder(self)
@@ -332,6 +384,8 @@
                 pages[index]?.setAccessibilityHidden(index != selectedIndex)
             }
             updateControls()
+            setChromeHidden(false)
+            scheduleChromeHide()
             needsLayout = true
             layoutSubtreeIfNeeded()
         }
@@ -353,12 +407,192 @@
             nextButton.nextKeyView =
                 activePage?.retryButton.isHidden == false ? activePage?.retryButton : closeButton
             activePage?.retryButton.nextKeyView = closeButton
+            loopButton.state = loopEnabled ? .on : .off
+            loopButton.contentTintColor = loopEnabled ? .controlAccentColor : .white
+            loopButton.isEnabled = acceptsInteraction
+            moreButton.nextKeyView = activePage?.videoView == nil ? previousButton : loopButton
+            updateChromeVisibility()
         }
 
         @objc private func accessibilityOptionsChanged() {
             for (index, page) in pages {
                 page.setActive(index == selectedIndex, reduceMotion: reduceMotion)
             }
+            noteInteraction()
+        }
+
+        @objc private func toggleLoop() {
+            guard acceptsInteraction else { return }
+            loopEnabled.toggle()
+            for page in pages.values { page.videoView?.loopEnabled = loopEnabled }
+            noteInteraction()
+            updateControls()
+        }
+
+        private func setChromeHidden(_ hidden: Bool) {
+            chromeIsHidden = hidden
+            updateChromeVisibility()
+        }
+
+        private func updateChromeVisibility() {
+            // A reveal restores every gallery control. Escape always dismisses, and
+            // keyboard/accessibility interaction prevents the timeout entirely.
+            closeButton.isHidden = chromeIsHidden
+            headerBackground.isHidden = chromeIsHidden
+            moreButton.isHidden = chromeIsHidden
+            loopButton.isHidden = chromeIsHidden || activePage?.videoView == nil
+            previousButton.isHidden = chromeIsHidden || gallery.items.count == 1
+            nextButton.isHidden = chromeIsHidden || gallery.items.count == 1
+            countLabel.isHidden = chromeIsHidden || gallery.items.count == 1
+            fileNameLabel.isHidden = chromeIsHidden
+            for surface in buttonGlassSurfaces {
+                surface.glass.isHidden = surface.button.isHidden
+            }
+        }
+
+        private func noteInteraction() {
+            setChromeHidden(false)
+            scheduleChromeHide()
+        }
+
+        private func scheduleChromeHide() {
+            chromeHideTask?.cancel()
+            chromeHideTask = nil
+            guard !chromeIsHidden, !isInvalidated, !isDismissing,
+                window != nil, activePage?.videoView?.isPlaying == true
+            else { return }
+            chromeHideTask = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                guard let self, !Task.isCancelled else { return }
+                self.chromeHideTask = nil
+                guard self.activePage?.videoView?.isPlaying == true else {
+                    self.setChromeHidden(false)
+                    return
+                }
+                if self.shouldKeepChromeVisible {
+                    self.scheduleChromeHide()
+                } else {
+                    self.setChromeHidden(true)
+                }
+            }
+        }
+
+        private var shouldKeepChromeVisible: Bool {
+            guard let window else { return true }
+            if NSEvent.pressedMouseButtons != 0 || menuIsTracking || keyboardInteraction
+                || isTransitioning || isMagnifying || !NSApp.isActive
+                || NSWorkspace.shared.isVoiceOverEnabled
+                || NSWorkspace.shared.isSwitchControlEnabled
+            {
+                return true
+            }
+            if let focused = window.firstResponder as? NSView,
+                focused.isDescendant(of: chrome)
+            {
+                return true
+            }
+            let mouse = window.mouseLocationOutsideOfEventStream
+            let chromePoint = chrome.convert(mouse, from: nil)
+            if chrome.subviews.contains(where: {
+                !$0.isHidden && $0.frame.contains(chromePoint)
+            }) {
+                return true
+            }
+            // Reserve a conservative native transport area without inspecting AVKit's
+            // private descendants. A held drag also protects scrubbing outside this area.
+            if let playerView = activePage?.videoView?.playerView {
+                let point = playerView.convert(mouse, from: nil)
+                let distanceFromBottom =
+                    playerView.isFlipped
+                    ? playerView.bounds.maxY - point.y : point.y - playerView.bounds.minY
+                if playerView.bounds.contains(point), distanceFromBottom < 96 { return true }
+            }
+            return false
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let interactionTrackingArea { removeTrackingArea(interactionTrackingArea) }
+            let area = NSTrackingArea(
+                rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+                owner: self, userInfo: nil)
+            interactionTrackingArea = area
+            addTrackingArea(area)
+        }
+
+        private func installInteractionMonitor() {
+            guard interactionMonitor == nil else { return }
+            interactionMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [
+                    .leftMouseDown, .leftMouseUp, .leftMouseDragged,
+                    .rightMouseDown, .rightMouseUp, .rightMouseDragged,
+                    .otherMouseDown, .otherMouseUp, .otherMouseDragged,
+                    .mouseMoved, .scrollWheel, .keyDown,
+                ]
+            ) { [weak self] event in
+                let consumed = MainActor.assumeIsolated {
+                    guard let self else { return false }
+                    return self.observeInteraction(event) == nil
+                }
+                return consumed ? nil : event
+            }
+        }
+
+        private func observeInteraction(_ event: NSEvent) -> NSEvent? {
+            guard !isInvalidated, !isDismissing, let window, event.window === window else {
+                return event
+            }
+            switch event.type {
+            case .leftMouseUp, .rightMouseUp, .otherMouseUp:
+                let suppress = suppressedMouseButton == event.buttonNumber
+                suppressedMouseButton = nil
+                scheduleChromeHide()
+                return suppress ? nil : event
+            case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+                noteInteraction()
+                return suppressedMouseButton == event.buttonNumber ? nil : event
+            case .keyDown:
+                keyboardInteraction = true
+                noteInteraction()
+                return event
+            default:
+                break
+            }
+            let point = convert(event.locationInWindow, from: nil)
+            guard bounds.contains(point) else { return event }
+            switch event.type {
+            case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+                let playerView = activePage?.videoView?.playerView
+                let revealOnly =
+                    chromeIsHidden
+                    && playerView.map {
+                        $0.bounds.contains($0.convert(event.locationInWindow, from: nil))
+                    } == true
+                keyboardInteraction = false
+                noteInteraction()
+                if revealOnly {
+                    // Consume the complete first click, not just mouseDown, so AVKit
+                    // cannot interpret the reveal as play/pause or a scrub.
+                    suppressedMouseButton = event.buttonNumber
+                    return nil
+                }
+            case .mouseMoved, .scrollWheel:
+                noteInteraction()
+            default:
+                break
+            }
+            return event
+        }
+
+        @objc private func menuTrackingBegan() {
+            guard window != nil, !isInvalidated, !isDismissing else { return }
+            menuIsTracking = true
+            noteInteraction()
+        }
+
+        @objc private func menuTrackingEnded() {
+            menuIsTracking = false
+            scheduleChromeHide()
         }
 
         override func layout() {
@@ -386,7 +620,9 @@
             closeButton.frame = CGRect(x: 16, y: headerTop + 2, width: 44, height: 44)
             moreButton.frame = CGRect(
                 x: max(72, bounds.width - 60), y: headerTop + 2, width: 44, height: 44)
-            let headerWidth = min(360, max(0, bounds.width - 152))
+            loopButton.frame = CGRect(
+                x: max(72, bounds.width - 112), y: headerTop + 2, width: 44, height: 44)
+            let headerWidth = min(360, max(0, bounds.width - 248))
             headerBackground.frame = CGRect(
                 x: (bounds.width - headerWidth) / 2, y: headerTop, width: headerWidth, height: 48)
             headerContent.frame = headerBackground.bounds
@@ -485,6 +721,8 @@
         // paging and dismissing on video pages. Space toggles the active video only while
         // focus is on the viewer or its player, leaving Space to activate focused buttons.
         private func handleKey(_ event: NSEvent) -> Bool {
+            keyboardInteraction = true
+            noteInteraction()
             guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
                 return false
             }
@@ -512,6 +750,21 @@
         @objc private func showImageMenu() {
             guard acceptsInteraction, saveTask == nil else { return }
             let menu = NSMenu()
+            menuIsTracking = true
+            noteInteraction()
+            defer {
+                menuIsTracking = false
+                scheduleChromeHide()
+            }
+            if activePage?.videoView != nil {
+                let loop = NSMenuItem(
+                    title: AppLanguage.localized("Loop"), action: #selector(toggleLoop),
+                    keyEquivalent: "")
+                loop.target = self
+                loop.state = loopEnabled ? .on : .off
+                menu.addItem(loop)
+                menu.addItem(.separator())
+            }
             let save = NSMenuItem(
                 title: gallery.items[selectedIndex].isVideo
                     ? AppLanguage.localized("Save Video") : AppLanguage.localized("Save Image"),
@@ -747,6 +1000,8 @@
                 gallery.items.indices.contains(selectedIndex + direction)
             else { return }
             resetDrag()
+            noteInteraction()
+            activePage?.setActive(false, reduceMotion: reduceMotion)
             window?.makeFirstResponder(self)
             settle(offset: CGPoint(x: -CGFloat(direction) * pageStride, y: 0)) { [weak self] in
                 guard let self else { return }
@@ -791,6 +1046,8 @@
         private func dismiss(downward: Bool) {
             guard !isDismissing, !isInvalidated else { return }
             isDismissing = true
+            chromeHideTask?.cancel()
+            chromeHideTask = nil
             animationGeneration += 1
             resetDrag()
             for page in pages.values { page.setActive(false, reduceMotion: reduceMotion) }
