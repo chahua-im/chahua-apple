@@ -110,6 +110,7 @@
         var appLanguage = AppLanguage.selected.rawValue {
             didSet {
                 guard appLanguage != oldValue, isViewLoaded else { return }
+                beginningLabel.text = AppLanguage.localized("Beginning of conversation")
                 preparation = nil
                 requestDisplayUpdate()
             }
@@ -181,6 +182,7 @@
             layout.sectionInset = .zero
             return TimelineCollectionView(frame: .zero, collectionViewLayout: layout)
         }()
+        private let beginningLabel = UILabel()
 
         init(model: ConversationTimelineModel, actions: TimelineBubbleActions) {
             self.model = model
@@ -204,6 +206,16 @@
             applyConversationBackground()
             collectionView.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(collectionView)
+            // Negative content coordinates belong to the pull-down area, not the
+            // fixed overlay or the first date separator's row.
+            beginningLabel.font = .preferredFont(forTextStyle: .caption1)
+            beginningLabel.adjustsFontForContentSizeCategory = true
+            beginningLabel.textColor = .secondaryLabel
+            beginningLabel.textAlignment = .center
+            beginningLabel.text = AppLanguage.localized("Beginning of conversation")
+            beginningLabel.isUserInteractionEnabled = false
+            beginningLabel.isHidden = true
+            collectionView.addSubview(beginningLabel)
             NSLayoutConstraint.activate([
                 collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -270,6 +282,7 @@
 
         override func viewDidLayoutSubviews() {
             super.viewDidLayoutSubviews()
+            updateBeginningLabel()
             guard !applying else { return }
             requestDisplayUpdate()
             if installedRevision < 0 { displayScheduler.flush() }
@@ -685,7 +698,18 @@
             model.userScrollBegan()
         }
 
+        private func updateBeginningLabel() {
+            beginningLabel.isHidden =
+                !model.state.olderBoundaryIsKnownStart || model.state.older != .idle
+                || collectionView.numberOfItems(inSection: 0) == 0
+                || collectionView.contentOffset.y >= -collectionView.adjustedContentInset.top
+            let height = max(48, beginningLabel.font.lineHeight + 16)
+            beginningLabel.frame = CGRect(
+                x: 0, y: -height, width: collectionView.bounds.width, height: height)
+        }
+
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            updateBeginningLabel()
             if userScrolling, actions.isSelectingMessages {
                 let offset = scrollView.contentOffset.y
                 if !applying, let previous = selectionDragOffset {
@@ -746,6 +770,7 @@
 
         private func receive(_ snapshot: TimelineHostSnapshot) {
             guard !isTornDown else { return }
+            updateBeginningLabel()
             // A subscriber can synchronously publish another snapshot before this subscriber
             // receives the outer send. The subject's current value also resolves same-revision
             // acknowledgement/cancellation ordering without resurrecting the outer intent.

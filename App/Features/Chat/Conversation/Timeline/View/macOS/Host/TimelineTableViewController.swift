@@ -125,6 +125,7 @@
         var appLanguage = AppLanguage.selected.rawValue {
             didSet {
                 guard appLanguage != oldValue, isViewLoaded else { return }
+                beginningLabel.stringValue = AppLanguage.localized("Beginning of conversation")
                 preparation = nil
                 requestDisplayUpdate()
             }
@@ -218,6 +219,7 @@
         private var scrollGeneration = 0
         private let scrollView = TimelineScrollView()
         private let tableView = NSTableView()
+        private let beginningLabel = NSTextField(labelWithString: "")
         private lazy var contextSource = TimelineContextSource(tableView: tableView)
         private let column = NSTableColumn(identifier: .init("timeline"))
 
@@ -282,6 +284,14 @@
             tableView.delegate = self
             tableView.dataSource = self
             scrollView.documentView = tableView
+            // The clip view uses document coordinates, including the elastic area
+            // before row zero. Keep this marker out of the fixed chrome and row layout.
+            beginningLabel.font = .preferredFont(forTextStyle: .caption1)
+            beginningLabel.textColor = .secondaryLabelColor
+            beginningLabel.alignment = .center
+            beginningLabel.stringValue = AppLanguage.localized("Beginning of conversation")
+            beginningLabel.isHidden = true
+            scrollView.contentView.addSubview(beginningLabel)
             view.addSubview(scrollView)
             NSLayoutConstraint.activate([
                 scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -369,6 +379,7 @@
             guard !isTornDown else { return }
             contextSource.start()
             super.viewDidLayout()
+            updateBeginningLabel()
             requestDisplayUpdate()
             if installedRevision < 0 { displayScheduler.flush() }
             reportViewport(reason: .layout)
@@ -563,6 +574,7 @@
         }
 
         private func receive(_ snapshot: TimelineHostSnapshot) {
+            updateBeginningLabel()
             // A subscriber can synchronously publish newer data before this subscriber
             // receives the older, outer send. Never replace installed or queued newer rows.
             let current = model.updates.value
@@ -1205,7 +1217,22 @@
             }
         }
 
+        private func updateBeginningLabel() {
+            let clip = scrollView.contentView
+            let height =
+                tableView.numberOfRows > 0
+                ? tableView.rect(ofRow: tableView.numberOfRows - 1).maxY : 0
+            let restingTop = min(
+                -scrollView.contentInsets.top,
+                height - clip.bounds.height + scrollView.contentInsets.bottom)
+            beginningLabel.isHidden =
+                !model.state.olderBoundaryIsKnownStart || model.state.older != .idle
+                || tableView.numberOfRows == 0 || clip.bounds.minY >= restingTop
+            beginningLabel.frame = NSRect(x: 0, y: -48, width: clip.bounds.width, height: 48)
+        }
+
         @objc private func boundsChanged() {
+            updateBeginningLabel()
             guard !applying, !settingScrollOrigin, !handlingWheel else { return }
             // Bounds notifications arrive inside AppKit's inset/resize transaction.
             // Place messages after layout, otherwise that transaction can overwrite

@@ -208,7 +208,7 @@
             case .offlineBoundary:
                 edgeLabel("Connect to load older messages.")
             case .beginning:
-                edgeLabel("Beginning of conversation")
+                EmptyView()
             }
         }
 

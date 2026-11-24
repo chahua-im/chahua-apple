@@ -138,7 +138,7 @@
             case .offlineBoundary:
                 olderEdge.update(.label(AppLanguage.localized("Connect to load older messages.")))
             case .beginning:
-                olderEdge.update(.label(AppLanguage.localized("Beginning of conversation")))
+                olderEdge.update(.hidden)
             }
             switch showsTable ? state.newer : .idle {
             case .idle: newerEdge.update(.hidden)

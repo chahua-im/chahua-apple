@@ -17,6 +17,55 @@
             TimelineDisplayScheduler.tickSource = .display
         }
 
+        func testBeginningMarkerOnlyAppearsInPullDownArea() async throws {
+            let messages = try (1...30).map {
+                try TimelineTestFixtures.message(id: UInt64($0), at: $0)
+            }
+            let source = ScriptedTimelineSource(pages: [.success(.init(messages: messages))])
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: source, messageStore: source.store)
+            let controller = TimelineTableViewController(model: model)
+            controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = controller
+            window.orderFront(nil)
+            defer {
+                controller.tearDown()
+                model.close()
+                window.close()
+            }
+            await model.loadInitial()
+            try await waitForDisplay(controller, model: model)
+            func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
+                (view as? T) ?? view.subviews.compactMap { find(type, in: $0) }.first
+            }
+            let scroll = try XCTUnwrap(find(NSScrollView.self, in: controller.view))
+            let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+            let clip = scroll.contentView
+            let label: NSTextField = try XCTUnwrap(
+                clip.subviews.compactMap { $0 as? NSTextField }.first)
+            NotificationCenter.default.post(
+                name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+            clip.setBoundsOrigin(NSPoint(x: 0, y: -scroll.contentInsets.top))
+            NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: clip)
+            XCTAssertTrue(label.isHidden)
+            clip.scroll(to: NSPoint(x: 0, y: -scroll.contentInsets.top - 64))
+            NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: clip)
+            XCTAssertFalse(
+                label.isHidden,
+                "origin=\(clip.bounds.minY) rows=\(table.numberOfRows) state=\(model.state)")
+            XCTAssertLessThanOrEqual(label.frame.maxY, table.rect(ofRow: 0).minY)
+            clip.setBoundsOrigin(NSPoint(x: 0, y: -scroll.contentInsets.top))
+            NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: clip)
+            XCTAssertTrue(label.isHidden)
+            NotificationCenter.default.post(
+                name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        }
+
         func testMountedLatestSeedRetainsBottomRowDuringHistoryRecovery() async throws {
             struct HistoryFailure: Error {}
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
