@@ -168,6 +168,11 @@ lane :ci_artifacts do
     # manual macOS release job submits, staples, and publishes a selected ZIP.
     zip = File.join(output, "Chahua-macOS.zip")
     sh("codesign", "--verify", "--deep", "--strict", app)
+    # Export may rewrite APNs entitlements; reject stale Info.plist metadata before packaging.
+    sh(
+      "xcrun", "swift", "-module-cache-path", File.join(root, "build", "swift-module-cache"),
+      File.join(root, "ci", "validate-macos-release.swift"), "apns", app
+    )
     sh("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, zip)
 
     artifacts = ["Chahua.ipa", "Chahua-macOS.zip"]

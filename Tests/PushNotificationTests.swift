@@ -1,4 +1,5 @@
 import ChahuaAPI
+import Combine
 import UserNotifications
 import XCTest
 
@@ -263,6 +264,150 @@ final class PushNotificationTests: XCTestCase {
             identifier: UUID().uuidString, content: content, trigger: nil)
         return try XCTUnwrap(
             UNNotification(coder: NotificationDecoder(["request": request, "date": Date()])))
+    }
+
+    func testPermissionWaitsForActiveAuthenticatedSessionAndRegistersAfterGrant() async throws {
+        let suite = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let api = PushSubscriptionStore()
+        var status = UNAuthorizationStatus.notDetermined
+        var requests = 0
+        let requested = expectation(description: "Permission requested after login")
+        let notifications = PushNotificationCoordinator(
+            api: api, namespace: suite, defaults: defaults, environment: "development",
+            authorizationStatusProvider: { status },
+            authorizationRequester: {
+                requests += 1
+                status = .authorized
+                requested.fulfill()
+                return true
+            })
+        let registered = expectation(description: "Granted permission registers the APNs token")
+        let observation = notifications.$isRegistered.first(where: { $0 }).sink { _ in
+            registered.fulfill()
+        }
+        defer { observation.cancel() }
+        let scene = UUID()
+        notifications.setSceneActive(id: scene, active: true)
+        await notifications.refreshAuthorization()
+        notifications.setSession(uid: nil)
+        await notifications.refreshAuthorization()
+        XCTAssertEqual(requests, 0, "Launch and unsuccessful login must not request permission.")
+
+        notifications.setSceneActive(id: scene, active: false)
+        notifications.setSession(uid: 1)
+        await notifications.refreshAuthorization()
+        XCTAssertEqual(requests, 0, "An inactive app must wait before showing the system prompt.")
+        notifications.didRegister(deviceToken: Data([0xAB, 0xCD]))
+        notifications.setSceneActive(id: scene, active: true)
+        await fulfillment(of: [requested, registered], timeout: 2)
+        XCTAssertEqual(notifications.authorizationStatus, .authorized)
+        XCTAssertTrue(notifications.isRegistered)
+        XCTAssertEqual(notifications.backendEnvironment, .sandbox)
+
+        notifications.setSession(uid: 1)
+        notifications.setSceneActive(id: UUID(), active: true)
+        await notifications.refreshAuthorization()
+        XCTAssertEqual(requests, 1)
+        notifications.setSession(uid: nil)
+    }
+
+    func testPermissionPromptIsNotRepeatedAcrossWindowsOrPromptActivityChanges() async throws {
+        let suite = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var requests = 0
+        var decision: CheckedContinuation<Bool, Never>?
+        let requested = expectation(description: "System prompt started")
+        let notifications = PushNotificationCoordinator(
+            api: PushSubscriptionStore(), namespace: suite, defaults: defaults,
+            environment: "development", authorizationStatusProvider: { .notDetermined },
+            authorizationRequester: {
+                requests += 1
+                return await withCheckedContinuation {
+                    decision = $0
+                    requested.fulfill()
+                }
+            })
+        let scene = UUID()
+        notifications.setSceneActive(id: scene, active: true)
+        notifications.setSession(uid: 1)
+        await fulfillment(of: [requested], timeout: 2)
+        notifications.setSceneActive(id: scene, active: false)
+        notifications.setSceneActive(id: scene, active: true)
+        notifications.setSceneActive(id: UUID(), active: true)
+        notifications.setSession(uid: 1)
+        await notifications.refreshAuthorization()
+        await notifications.requestAuthorization()
+        XCTAssertEqual(requests, 1)
+        decision?.resume(returning: false)
+        await notifications.refreshAuthorization()
+        XCTAssertEqual(
+            requests, 1, "A still-undetermined result must not repeat this login's prompt.")
+        notifications.setSession(uid: nil)
+    }
+
+    func testDecidedPermissionsSkipPromptAndAllowedPermissionStillRegisters() async throws {
+        for status in [UNAuthorizationStatus.authorized, .provisional, .denied] {
+            let suite = UUID().uuidString
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            var requests = 0
+            let notifications = PushNotificationCoordinator(
+                api: PushSubscriptionStore(), namespace: suite, defaults: defaults,
+                environment: "development", authorizationStatusProvider: { status },
+                authorizationRequester: {
+                    requests += 1
+                    return true
+                })
+            let registered =
+                status == .denied
+                ? nil : expectation(description: "Existing grant registers the APNs token")
+            let observation = notifications.$isRegistered.first(where: { $0 }).sink { _ in
+                registered?.fulfill()
+            }
+            defer { observation.cancel() }
+            notifications.setSceneActive(id: UUID(), active: true)
+            notifications.setSession(uid: 1)
+            notifications.didRegister(deviceToken: Data([0xAB, 0xCD]))
+            await notifications.refreshAuthorization()
+            if let registered { await fulfillment(of: [registered], timeout: 2) }
+            XCTAssertEqual(requests, 0)
+            XCTAssertEqual(notifications.authorizationStatus, status)
+            XCTAssertEqual(notifications.isRegistered, status != .denied)
+            notifications.setSession(uid: nil)
+        }
+    }
+
+    func testLogoutWhileReadingPermissionPreventsPrompt() async throws {
+        let suite = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let reading = expectation(description: "Permission status read started")
+        var result: CheckedContinuation<UNAuthorizationStatus, Never>?
+        var requests = 0
+        let notifications = PushNotificationCoordinator(
+            api: PushSubscriptionStore(), namespace: suite, defaults: defaults,
+            environment: "development",
+            authorizationStatusProvider: {
+                await withCheckedContinuation {
+                    result = $0
+                    reading.fulfill()
+                }
+            },
+            authorizationRequester: {
+                requests += 1
+                return true
+            })
+        notifications.setSceneActive(id: UUID(), active: true)
+        notifications.setSession(uid: 1)
+        await fulfillment(of: [reading], timeout: 2)
+        notifications.setSession(uid: nil)
+        result?.resume(returning: .notDetermined)
+        // Drain the main-actor task after its suspended status read.
+        await Task.yield()
+        XCTAssertEqual(requests, 0)
     }
 
     func testSignedAPNsEnvironmentOverridesBuildMetadata() {

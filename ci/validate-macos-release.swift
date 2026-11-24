@@ -1,6 +1,7 @@
 import CoreFoundation
 import CryptoKit
 import Foundation
+import Security
 
 private struct ValidationFailure: Error, CustomStringConvertible {
     let description: String
@@ -41,14 +42,60 @@ private func publicKey(_ info: [String: Any]) throws -> Curve25519.Signing.Publi
     return try Curve25519.Signing.PublicKey(rawRepresentation: data)
 }
 
+private func verifyAPNSEnvironment(_ info: [String: Any], appURL: URL) throws {
+    let configured = try string(info, "ChahuaAPNSEnvironment")
+    try require(
+        configured == "development" || configured == "production",
+        "App ChahuaAPNSEnvironment must be development or production")
+
+    // Read the final signature, not the source entitlements or provisioning profile:
+    // Developer ID export can replace the archive's APNs environment.
+    var code: SecStaticCode?
+    try require(
+        SecStaticCodeCreateWithPath(appURL as CFURL, [], &code) == errSecSuccess,
+        "Unable to open the exported app's code signature")
+    guard let code else {
+        throw ValidationFailure(description: "Missing exported app code signature")
+    }
+    var signingInformation: CFDictionary?
+    try require(
+        SecCodeCopySigningInformation(
+            code, SecCSFlags(rawValue: kSecCSSigningInformation), &signingInformation)
+            == errSecSuccess,
+        "Unable to read the exported app's signed entitlements")
+    guard let signingInformation = signingInformation as? [String: Any],
+        let entitlements = signingInformation[kSecCodeInfoEntitlementsDict as String]
+            as? [String: Any],
+        let signed = entitlements["com.apple.developer.aps-environment"] as? String,
+        signed == "development" || signed == "production"
+    else {
+        throw ValidationFailure(
+            description: "Missing or invalid signed com.apple.developer.aps-environment")
+    }
+    try require(
+        configured == signed,
+        "App ChahuaAPNSEnvironment (\(configured)) differs from signed APNs environment (\(signed))")
+}
+
 private func validate() throws {
-    let infoData = try Data(
-        contentsOf: URL(fileURLWithPath: "build/notarized/Chahua.app/Contents/Info.plist"))
+    let mode = CommandLine.arguments.dropFirst().first
+    let appURL: URL
+    if mode == "apns" {
+        try require(CommandLine.arguments.count == 3, "Expected apns <exported app path>")
+        appURL = URL(fileURLWithPath: CommandLine.arguments[2])
+    } else {
+        appURL = URL(fileURLWithPath: "build/notarized/Chahua.app")
+    }
+    let infoData = try Data(contentsOf: appURL.appendingPathComponent("Contents/Info.plist"))
     guard
         let info = try PropertyListSerialization.propertyList(from: infoData, format: nil)
             as? [String: Any]
     else {
         throw ValidationFailure(description: "App Info.plist is not a dictionary")
+    }
+    if mode == "apns" {
+        try verifyAPNSEnvironment(info, appURL: appURL)
+        return
     }
     let version = try environment("APPLE_BUNDLE_VERSION")
     let selectedBuild = try environment("SELECTED_APPLE_BUILD")
@@ -62,8 +109,9 @@ private func validate() throws {
         try string(info, "CFBundleIdentifier") == "app.chahua.chat",
         "Unexpected app bundle identifier")
 
-    switch CommandLine.arguments.dropFirst().first {
+    switch mode {
     case "bundle":
+        try verifyAPNSEnvironment(info, appURL: appURL)
         try require(
             try string(info, "SUFeedURL")
                 == "https://jenkins.codetector.org/job/chahua/job/deploy/job/macos-notarize/lastSuccessfulBuild/artifact/build/artifacts/appcast.xml",
@@ -151,7 +199,7 @@ private func validate() throws {
             try publicKey(info).isValidSignature(signature, for: zip),
             "Appcast signature is invalid for the final ZIP and app public key")
     default:
-        throw ValidationFailure(description: "Expected bundle, key, or appcast validation mode")
+        throw ValidationFailure(description: "Expected apns, bundle, key, or appcast validation mode")
     }
 }
 

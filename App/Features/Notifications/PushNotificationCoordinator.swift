@@ -45,6 +45,7 @@ final class PushNotificationCoordinator: ObservableObject {
     private let api: (any PushSubscriptionProviding)?
     private let center: UNUserNotificationCenter
     private let authorizationStatusProvider: @MainActor @Sendable () async -> UNAuthorizationStatus
+    private let authorizationRequester: @MainActor @Sendable () async throws -> Bool
     private let defaults: UserDefaults
     private let storageKey: String
     private let environment: APNsEnvironment?
@@ -57,6 +58,8 @@ final class PushNotificationCoordinator: ObservableObject {
     private var registration: Registration?
     private var registrationTask: Task<Void, Never>?
     private var authorizationTask: Task<Void, Never>?
+    private var automaticAuthorizationRequested = false
+    private var isRequestingAuthorization = false
     private var cleanupTask: Task<Void, Never>?
     private var isSigningOut = false
     private var signOutUnregistered = false
@@ -78,13 +81,19 @@ final class PushNotificationCoordinator: ObservableObject {
         environment: String? = Bundle.main.object(forInfoDictionaryKey: "ChahuaAPNSEnvironment")
             as? String,
         signedEntitlement: String? = nil,
-        authorizationStatusProvider: (@MainActor @Sendable () async -> UNAuthorizationStatus)? = nil
+        authorizationStatusProvider: (@MainActor @Sendable () async -> UNAuthorizationStatus)? =
+            nil,
+        authorizationRequester: (@MainActor @Sendable () async throws -> Bool)? = nil
     ) {
         self.api = api
         self.center = center
         self.authorizationStatusProvider =
             authorizationStatusProvider ?? {
                 await center.notificationSettings().authorizationStatus
+            }
+        self.authorizationRequester =
+            authorizationRequester ?? {
+                try await center.requestAuthorization(options: [.alert, .sound, .badge])
             }
         self.defaults = defaults
         storageKey = "APNsRegistration." + namespace
@@ -133,6 +142,7 @@ final class PushNotificationCoordinator: ObservableObject {
         let priorUID = self.uid ?? registration?.uid
         self.uid = uid
         generation &+= 1
+        automaticAuthorizationRequested = false
         isSigningOut = false
         signOutUnregistered = false
         isRegistered = false
@@ -163,7 +173,9 @@ final class PushNotificationCoordinator: ObservableObject {
 
     func setSceneActive(id: UUID, active: Bool) {
         if active { activeScenes.insert(id) } else { activeScenes.remove(id) }
-        if active, uid != nil {
+        // The system prompt can change scene activity. Keep its task alive so
+        // its result still refreshes permission and registers the current token.
+        if active, uid != nil, !isRequestingAuthorization {
             authorizationTask?.cancel()
             authorizationTask = Task { [weak self] in await self?.refreshAuthorization() }
         }
@@ -184,6 +196,15 @@ final class PushNotificationCoordinator: ObservableObject {
         guard !Task.isCancelled, requestGeneration == generation else { return }
         authorizationStatus = status
         guard uid != nil, !isSigningOut, !isUnregistering, !notificationsDisabled, api != nil else {
+            return
+        }
+        if status == .notDetermined, !activeScenes.isEmpty,
+            !automaticAuthorizationRequested, !isRequestingAuthorization
+        {
+            // Claim before suspension: multiple windows and repeated session
+            // callbacks must not prompt twice for one authenticated session.
+            automaticAuthorizationRequested = true
+            await requestAuthorization()
             return
         }
         if permitsNotifications {
@@ -220,10 +241,21 @@ final class PushNotificationCoordinator: ObservableObject {
     }
 
     func requestAuthorization() async {
-        guard uid != nil, !isSigningOut, !isUnregistering else { return }
+        guard uid != nil, !isSigningOut, !isUnregistering, !isRequestingAuthorization else {
+            return
+        }
+        isRequestingAuthorization = true
         let requestGeneration = generation
+        defer {
+            isRequestingAuthorization = false
+            // A different account can sign in while the system prompt is open.
+            // Refresh its permission without applying the old session's result.
+            if requestGeneration != generation, uid != nil {
+                authorizationTask = Task { [weak self] in await self?.refreshAuthorization() }
+            }
+        }
         do {
-            let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+            let granted = try await authorizationRequester()
             guard requestGeneration == generation, !isSigningOut, !isUnregistering else { return }
             if granted {
                 notificationsDisabled = false
