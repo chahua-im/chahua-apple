@@ -201,8 +201,8 @@ struct ChatFloatingHeader<Avatar: View>: View {
     var onBack: (() -> Void)?
     var onClose: (() -> Void)?
     var onOpenInfo: (() -> Void)?
-    /// Search lives on the info page; the header only binds ⌘F, with no visible button.
     var onSearch: (() -> Void)?
+    var isSearchPresented = false
     var notificationChat: ChatListItem?
     var notificationDefaults: NotificationSettingsResponse?
     var onUpdateNotifications: ((ChatListItem, UpdateNotificationSettingRequest?) -> Void)?
@@ -222,6 +222,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
     @ViewBuilder var avatar: () -> Avatar
 
     private var usesDesktopChrome: Bool {
+        // macOS uses compact pointer targets in one action capsule. Keep the larger
+        // touch targets and separate circular controls on iPhone/iPad; a shared
+        // compact frame would reduce their touch area. SwiftUI supplies both layouts.
         #if os(macOS)
             true
         #else
@@ -238,11 +241,14 @@ struct ChatFloatingHeader<Avatar: View>: View {
             HStack(spacing: usesDesktopChrome ? 10 : 8) {
                 navigationControl
                 identity
+                    .frame(minWidth: 0)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if onSearch != nil || (notificationChat != nil && onUpdateNotifications != nil)
                     || onOpenInfo != nil || onForward != nil || trailingIsControl
                 {
                     wideControls
+                        .fixedSize(horizontal: usesDesktopChrome, vertical: false)
+                        .layoutPriority(usesDesktopChrome ? 1 : 0)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -272,6 +278,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
         HStack(spacing: usesDesktopChrome ? 2 : 0) {
             if let onSearch {
                 wideControl("Search messages", systemImage: "magnifyingglass", action: onSearch)
+                    .foregroundStyle(isSearchPresented ? Color.accentColor : Color.primary)
             }
             if let notificationChat, let onUpdateNotifications {
                 Menu {
@@ -306,7 +313,19 @@ struct ChatFloatingHeader<Avatar: View>: View {
                 .accessibilityValue(isInspectorPresented ? "Open" : "Closed")
                 .accessibilityIdentifier("chat-inspector-toggle")
             }
-            if onForward != nil || trailingIsControl {
+            if usesDesktopChrome {
+                if let onForward {
+                    wideControl(
+                        "Forward Thread", systemImage: "arrowshape.turn.up.right", action: onForward)
+                }
+                if trailingIsControl {
+                    // The slot is already a button; do not add glass or an info button
+                    // around it. Normal-chat avatars remain in the identity capsule.
+                    avatar()
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+            } else if onForward != nil || trailingIsControl {
                 trailingControls
             }
         }

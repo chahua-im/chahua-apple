@@ -1,8 +1,8 @@
 import ChahuaAPI
 import SwiftUI
 
-/// Subscription control in the thread title bar, rendered inside the header's
-/// circular glass slot.
+/// Subscription control in the thread title bar. The header owns its glass:
+/// a shared action capsule on desktop, a circular touch target on iPhone/iPad.
 ///
 /// Unsubscribed threads show a bell that subscribes in one tap. Subscribed
 /// threads show an archive box: outlined archives after confirmation, filled
@@ -10,21 +10,41 @@ import SwiftUI
 struct ThreadSubscriptionMenu: View {
     @ObservedObject var model: ThreadSubscriptionModel
     @State private var confirmsArchive = false
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
+
+    private var usesDesktopChrome: Bool {
+        #if os(macOS)
+            isWideChatLayout
+        #else
+            false
+        #endif
+    }
+
+    private var statusLabel: some View {
+        Group {
+            if model.isMutating || (model.isLoading && model.status == nil) {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: symbol)
+                    // Match the desktop capsule without changing touch chrome.
+                    .font(
+                        .system(
+                            size: usesDesktopChrome ? 18 : 17,
+                            weight: usesDesktopChrome ? .regular : .semibold))
+                    .foregroundStyle(isActive ? Color.accentColor : .secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
     var body: some View {
         Button(action: tap) {
-            Group {
-                if model.isMutating || (model.isLoading && model.status == nil) {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: symbol)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(isActive ? Color.accentColor : .secondary)
-                }
+            if usesDesktopChrome {
+                statusLabel.contentShape(Rectangle())
+            } else {
+                statusLabel.contentShape(Circle())
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .disabled(model.isMutating || (model.status == nil && !model.loadFailed))
