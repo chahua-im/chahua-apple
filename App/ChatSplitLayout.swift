@@ -48,6 +48,7 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var preferredSidebarWidth = ChatSplitMetrics.initialSidebarWidth
     @State private var dragStartWidth: CGFloat?
+    @State private var isSplit = false
     #if os(macOS)
         @GestureState private var isResizing = false
     #endif
@@ -63,65 +64,65 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            let isSplit = proxy.size.width >= ChatSplitMetrics.splitThreshold
-            let availableWidth = proxy.size.width
-            let sidebarWidth = effectiveSidebarWidth(for: availableWidth)
-            let detailWidth = max(0, availableWidth - sidebarWidth - ChatSplitMetrics.dividerWidth)
-
-            HStack(spacing: 0) {
-                pane(
-                    sidebar(isSplit)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        #if os(macOS)
-                            .modifier(MacChatSidebarSurface(isSplit: isSplit))
-                        #else
-                            .background(.regularMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: isSplit ? 20 : 0))
-                        #endif
-                        .padding(.leading, isSplit ? ChatSplitMetrics.sidebarOuterInset : 0)
-                        .padding(.vertical, isSplit ? ChatSplitMetrics.sidebarOuterInset : 0),
-                    width: isSplit ? sidebarWidth : (hasSelection ? 0 : proxy.size.width),
-                    isVisible: isSplit || !hasSelection
-                )
-
-                splitDivider(isSplit: isSplit, availableWidth: availableWidth)
-                    .frame(width: isSplit ? ChatSplitMetrics.dividerWidth : 0)
-                    .opacity(isSplit ? 1 : 0)
-                    .allowsHitTesting(isSplit)
-                    .accessibilityHidden(!isSplit)
-                    .zIndex(1)
-
-                pane(
-                    detail(isSplit),
-                    width: isSplit ? detailWidth : (hasSelection ? proxy.size.width : 0),
-                    isVisible: isSplit || hasSelection
-                )
-            }
-            .environment(\.isWideChatLayout, isSplit)
-            #if os(macOS)
-                .environment(\.isChatSplitResizing, isSplit && isResizing)
-                .onChange(of: isResizing) { _, resizing in
-                    // Gesture state also resets when SwiftUI cancels the drag.
-                    if !resizing { dragStartWidth = nil }
-                }
-            #endif
-            .onChange(of: isSplit) { _, split in
-                if !split { dragStartWidth = nil }
-            }
+        ChatSplitPaneLayout(
+            preferredSidebarWidth: preferredSidebarWidth, hasSelection: hasSelection
+        ) {
+            pane(
+                sidebar(isSplit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    #if os(macOS)
+                        .modifier(MacChatSidebarSurface(isSplit: isSplit))
+                    #else
+                        .background(.regularMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: isSplit ? 20 : 0))
+                    #endif
+                    .padding(.leading, isSplit ? ChatSplitMetrics.sidebarOuterInset : 0)
+                    .padding(.vertical, isSplit ? ChatSplitMetrics.sidebarOuterInset : 0),
+                isVisible: isSplit || !hasSelection
+            )
+            pane(detail(isSplit), isVisible: isSplit || hasSelection)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .environment(\.isWideChatLayout, isSplit)
+        .overlay {
+            // Only the divider needs the exact width for dragging and accessibility.
+            // A window resize must not rebuild either pane's content at every pixel.
+            GeometryReader { geometry in
+                let availableWidth = geometry.size.width
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                        .frame(width: effectiveSidebarWidth(for: availableWidth))
+                    splitDivider(isSplit: isSplit, availableWidth: availableWidth)
+                        .frame(width: ChatSplitMetrics.dividerWidth)
+                    Spacer(minLength: 0)
+                }
+            }
+            .opacity(isSplit ? 1 : 0)
+            .allowsHitTesting(isSplit)
+            .accessibilityHidden(!isSplit)
+        }
+        .onGeometryChange(for: Bool.self) {
+            $0.size.width >= ChatSplitMetrics.splitThreshold
+        } action: { split in
+            isSplit = split
+            if !split { dragStartWidth = nil }
+        }
+        #if os(macOS)
+            .environment(\.isChatSplitResizing, isSplit && isResizing)
+            .onChange(of: isResizing) { _, resizing in
+                // Gesture state also resets when SwiftUI cancels the drag.
+                if !resizing { dragStartWidth = nil }
+            }
+        #endif
         #if os(macOS)
             .ignoresSafeArea(.container, edges: .top)
         #endif
         .background(ChahuaTheme.conversationBackground(for: colorScheme))
     }
 
-    private func pane<Content: View>(_ content: Content, width: CGFloat, isVisible: Bool)
-        -> some View
-    {
+    private func pane<Content: View>(_ content: Content, isVisible: Bool) -> some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .frame(width: max(0, width), alignment: .leading)
             .opacity(isVisible ? 1 : 0)
             .allowsHitTesting(isVisible)
             .accessibilityHidden(!isVisible)
@@ -186,11 +187,45 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     }
 
     private func clampedSidebarWidth(_ width: CGFloat, availableWidth: CGFloat) -> CGFloat {
+        ChatSplitPaneLayout.sidebarWidth(width, availableWidth: availableWidth)
+    }
+}
+
+/// Width changes belong to layout, not to the view values that build both panes.
+/// Keep both children mounted across the compact breakpoint to retain navigation.
+private struct ChatSplitPaneLayout: Layout {
+    var preferredSidebarWidth: CGFloat
+    var hasSelection: Bool
+
+    static func sidebarWidth(_ preferredWidth: CGFloat, availableWidth: CGFloat) -> CGFloat {
         let maximumAllowed = min(
             ChatSplitMetrics.maximumSidebarWidth,
-            availableWidth - ChatSplitMetrics.minimumDetailWidth - ChatSplitMetrics.dividerWidth
-        )
-        return min(max(width, ChatSplitMetrics.minimumSidebarWidth), maximumAllowed)
+            availableWidth - ChatSplitMetrics.minimumDetailWidth - ChatSplitMetrics.dividerWidth)
+        return max(
+            0, min(max(preferredWidth, ChatSplitMetrics.minimumSidebarWidth), maximumAllowed))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 10, height: 10))
+    }
+
+    func placeSubviews(
+        in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+    ) {
+        let split = bounds.width >= ChatSplitMetrics.splitThreshold
+        let sidebar =
+            split
+            ? Self.sidebarWidth(preferredSidebarWidth, availableWidth: bounds.width)
+            : (hasSelection ? 0 : bounds.width)
+        let divider = split ? ChatSplitMetrics.dividerWidth : 0
+        let detail = max(0, bounds.width - sidebar - divider)
+        // SwiftUI mirrors the layout's logical coordinates for right-to-left content.
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: bounds.minY),
+            anchor: .topLeading, proposal: ProposedViewSize(width: sidebar, height: bounds.height))
+        subviews[1].place(
+            at: CGPoint(x: bounds.minX + sidebar + divider, y: bounds.minY),
+            anchor: .topLeading, proposal: ProposedViewSize(width: detail, height: bounds.height))
     }
 }
 

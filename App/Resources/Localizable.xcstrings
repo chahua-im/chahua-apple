@@ -6177,7 +6177,20 @@
       }
     },
     "Destination Group" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标群组"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目標群組"
+          }
+        }
+      }
     },
     "Developer authentication" : {
       "extractionState" : "manual",
@@ -12907,7 +12920,20 @@
       }
     },
     "Prerequisite Group" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前置群组"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前置群組"
+          }
+        }
+      }
     },
     "Preview" : {
       "comment" : "The section of the sticker upload sheet that displays the sticker preview.",

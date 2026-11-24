@@ -223,39 +223,41 @@ struct AuthenticatedShell: View {
         ScrollPerformanceTrace.logChanges(Self.self)
         ScrollPerformanceTrace.event("Shell.Body")
         bindNavigationActions()
-        return GeometryReader { geometry in
-            let wantsSplit = geometry.size.width >= ChatSplitMetrics.splitThreshold
+        return Group {
             #if os(macOS)
                 adaptiveLayout
             #else
-                Group {
-                    if retainedSplitPresentation ?? wantsSplit {
-                        adaptiveLayout
-                    } else {
-                        if UserProfilePresentation.usesModal {
-                            ChatInspectorLayout(
-                                isPresented: inspectorPresentation,
-                                freezesPresentation: groupExitGuard.isProtected
-                            ) {
-                                listNavigation(includesDetail: true)
-                            } inspector: {
-                                inspectorContent
-                            }
-                            .onChange(of: selectedConversationID) { _, _ in
-                                showsInspector = false
-                                inspectorProfileUID = nil
-                            }
+                GeometryReader { geometry in
+                    let wantsSplit = geometry.size.width >= ChatSplitMetrics.splitThreshold
+                    Group {
+                        if retainedSplitPresentation ?? wantsSplit {
+                            adaptiveLayout
                         } else {
-                            listNavigation(includesDetail: true)
+                            if UserProfilePresentation.usesModal {
+                                ChatInspectorLayout(
+                                    isPresented: inspectorPresentation,
+                                    freezesPresentation: groupExitGuard.isProtected
+                                ) {
+                                    listNavigation(includesDetail: true)
+                                } inspector: {
+                                    inspectorContent
+                                }
+                                .onChange(of: selectedConversationID) { _, _ in
+                                    showsInspector = false
+                                    inspectorProfileUID = nil
+                                }
+                            } else {
+                                listNavigation(includesDetail: true)
+                            }
                         }
                     }
-                }
-                .environment(\.conversationListBottomSafeArea, geometry.safeAreaInsets.bottom)
-                .onChange(of: wantsSplit, initial: true) { _, value in
-                    if !groupExitGuard.isProtected { retainedSplitPresentation = value }
-                }
-                .onChange(of: groupExitGuard.isProtected) { _, protected in
-                    if !protected { retainedSplitPresentation = wantsSplit }
+                    .environment(\.conversationListBottomSafeArea, geometry.safeAreaInsets.bottom)
+                    .onChange(of: wantsSplit, initial: true) { _, value in
+                        if !groupExitGuard.isProtected { retainedSplitPresentation = value }
+                    }
+                    .onChange(of: groupExitGuard.isProtected) { _, protected in
+                        if !protected { retainedSplitPresentation = wantsSplit }
+                    }
                 }
             #endif
         }

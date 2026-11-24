@@ -48,9 +48,6 @@
         }
       }
     },
-    "Chahua composer media slot" : {
-
-    },
     "NSCameraUsageDescription" : {
       "comment" : "Privacy - Camera Usage Description",
       "extractionState" : "manual",

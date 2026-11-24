@@ -11,6 +11,7 @@ struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
     @ViewBuilder var detail: () -> Detail
     @ViewBuilder var inspector: () -> Inspector
     @State private var presentedInline: Bool?
+    @State private var fitsInline = false
 
     static var inspectorWidth: CGFloat { 340 }
     static var gap: CGFloat {
@@ -22,66 +23,69 @@ struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            let fitsInline =
-                geometry.size.width >= ChatSplitMetrics.minimumDetailWidth
-                + Self.inspectorWidth + Self.gap + ChatSplitMetrics.outerInset
-            let presentsInline = presentedInline ?? fitsInline
-            HStack(spacing: Self.gap) {
-                detail()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if isPresented && presentsInline {
-                    inspector()
-                        .environment(\.chatInfoIsModal, false)
-                        .voicePlaybackCovered(true)
-                        .frame(width: Self.inspectorWidth)
-                        #if os(macOS)
-                            .modifier(MacChatInfoSurface())
-                        #else
-                            .background(.background)
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
-                        #endif
-                        .padding(.trailing, ChatSplitMetrics.outerInset)
-                        .padding(.vertical, ChatSplitMetrics.outerInset)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            }
-            .voicePlaybackCovered(isPresented && !presentsInline && !overlaysWhenNarrow)
-            .overlay(alignment: .trailing) {
-                if isPresented && !presentsInline && overlaysWhenNarrow {
-                    inspector()
-                        .environment(\.chatInfoIsModal, false)
-                        .frame(width: min(Self.inspectorWidth, geometry.size.width))
-                        #if os(macOS)
-                            .modifier(MacChatInfoSurface())
-                        #else
-                            .background(.background)
-                        #endif
-                        .padding(.trailing, ChatSplitMetrics.outerInset)
-                        .padding(.vertical, ChatSplitMetrics.outerInset)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            }
-            .onChange(of: fitsInline, initial: true) { _, value in
-                if presentedInline == nil || !freezesPresentation { presentedInline = value }
-            }
-            .onChange(of: freezesPresentation) { _, frozen in
-                if !frozen { presentedInline = fitsInline }
-            }
-            .sheet(
-                isPresented: Binding(
-                    get: { isPresented && !presentsInline && !overlaysWhenNarrow },
-                    set: {
-                        if !$0 && !presentsInline && !overlaysWhenNarrow { isPresented = false }
-                    }
-                )
-            ) {
+        let presentsInline = presentedInline ?? fitsInline
+        HStack(spacing: Self.gap) {
+            detail()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if isPresented && presentsInline {
                 inspector()
-                    .environment(\.isVoicePlaybackHeaderCovered, false)
-                    .environment(\.chatInfoIsModal, true)
-                    .modifier(ChatInfoModalSizing())
-                    .interactiveDismissDisabled(freezesPresentation)
+                    .environment(\.chatInfoIsModal, false)
+                    .voicePlaybackCovered(true)
+                    .frame(width: Self.inspectorWidth)
+                    #if os(macOS)
+                        .modifier(MacChatInfoSurface())
+                    #else
+                        .background(.background)
+                        .clipShape(RoundedRectangle(cornerRadius: 20))
+                    #endif
+                    .padding(.trailing, ChatSplitMetrics.outerInset)
+                    .padding(.vertical, ChatSplitMetrics.outerInset)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .voicePlaybackCovered(isPresented && !presentsInline && !overlaysWhenNarrow)
+        .overlay(alignment: .trailing) {
+            if isPresented && !presentsInline && overlaysWhenNarrow {
+                inspector()
+                    .environment(\.chatInfoIsModal, false)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: Self.inspectorWidth)
+                    #if os(macOS)
+                        .modifier(MacChatInfoSurface())
+                    #else
+                        .background(.background)
+                    #endif
+                    .padding(.trailing, ChatSplitMetrics.outerInset)
+                    .padding(.vertical, ChatSplitMetrics.outerInset)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        // Content depends on the presentation breakpoint, not on each pixel of width.
+        .onGeometryChange(for: Bool.self) {
+            $0.size.width >= ChatSplitMetrics.minimumDetailWidth
+                + Self.inspectorWidth + Self.gap + ChatSplitMetrics.outerInset
+        } action: { value in
+            fitsInline = value
+            if presentedInline == nil || !freezesPresentation { presentedInline = value }
+        }
+        .onChange(of: freezesPresentation) { _, frozen in
+            if !frozen { presentedInline = fitsInline }
+        }
+        .sheet(
+            isPresented: Binding(
+                // Do not open a sheet before the first width measurement is available.
+                get: { isPresented && presentedInline == false && !overlaysWhenNarrow },
+                set: {
+                    if !$0 && !presentsInline && !overlaysWhenNarrow { isPresented = false }
+                }
+            )
+        ) {
+            inspector()
+                .environment(\.isVoicePlaybackHeaderCovered, false)
+                .environment(\.chatInfoIsModal, true)
+                .modifier(ChatInfoModalSizing())
+                .interactiveDismissDisabled(freezesPresentation)
         }
     }
 }
