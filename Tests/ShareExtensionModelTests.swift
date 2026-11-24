@@ -11,6 +11,159 @@ import XCTest
 
 @MainActor
 final class ShareExtensionModelTests: XCTestCase {
+    func testRestrictedProfileDoesNotAffectDirectMessagesOrReadProfile() async throws {
+        let provider = NSItemProvider(object: "Direct message" as NSString)
+        let (model, api) = await loadShare(provider: provider)
+        defer { model.cancel() }
+        await api.setAuthenticatedProfile(try shareProfile(restricted: true))
+        await api.setConversationPageMetadata(
+            group: .init(
+                id: "recipient", myRole: .member, kind: .dm,
+                peer: .init(uid: 18, username: "Peer", gender: 0)))
+        let relationship = try JSONDecoder().decode(
+            FriendRelationshipResponse.self,
+            from: Data(#"{"peerUid":18,"canDm":true}"#.utf8))
+        await api.setShareFriendRelationship(relationship)
+        model.selectDestination(try XCTUnwrap(model.destinations.first))
+        try await waitFor(model.$isCheckingPermission) { !$0 }
+        XCTAssertTrue(model.canSend)
+        model.send()
+        try await waitFor(model.$state) { $0 == .ready }
+        let sends = await api.sentMessageRequests
+        let profileReads = await api.meRequestCount
+        XCTAssertEqual(sends.count, 1)
+        XCTAssertEqual(profileReads, 0)
+        XCTAssertTrue(model.canSend, "An ordinary transport failure remains retryable.")
+    }
+
+    func testRestrictedProfileBlocksGroupThreadForMembersAndAdministrators() async throws {
+        let profile = try shareProfile(restricted: true)
+        let root = MessagePreview(
+            id: MessageID(1), clientGeneratedId: "root", createdAt: .distantPast,
+            sender: profile.asSender, messageType: .text, message: "Topic")
+        let thread = ThreadListItem(
+            chatId: "recipient", chatName: "Recipient", threadRootMessage: root,
+            replyCount: 0, lastReplyAt: .distantPast, unreadCount: 0, chatKind: .group,
+            subscribedAt: .distantPast, archived: false)
+        for role in [GroupRole.member, .admin] {
+            let api = FakeChatAPI(
+                chatResults: [.success(.init(chats: []))],
+                threadResults: [.success(.init(threads: [thread]))])
+            await api.setAuthenticatedProfile(profile)
+            await api.setConversationPageMetadata(
+                group: .init(
+                    id: "recipient", myRole: role, kind: .group,
+                    effectiveSpeakingMode: .unrestricted))
+            let item = NSExtensionItem()
+            item.attachments = [NSItemProvider(object: "Thread reply" as NSString)]
+            let model = ShareExtensionModel(
+                extensionItems: [item], makeSession: { ("isolated-session", api) })
+            await model.load()
+            model.selectDestination(try XCTUnwrap(model.destinations.first))
+            try await waitFor(model.$isCheckingPermission) { !$0 }
+            XCTAssertFalse(model.canSend)
+            XCTAssertNotNil(model.destinationPermissionMessage)
+            model.send()
+            let sends = await api.sentMessageRequests
+            XCTAssertTrue(sends.isEmpty)
+            XCTAssertEqual(model.caption, "Thread reply")
+            model.cancel()
+        }
+    }
+
+    func testRestrictedAdministratorCannotSendAndExplicitRefreshRestoresPermission() async throws {
+        let provider = NSItemProvider(object: "Keep this shared content" as NSString)
+        let (model, api) = await loadShare(provider: provider)
+        defer { model.cancel() }
+        await api.setAuthenticatedProfile(try shareProfile(restricted: true))
+        let destination = try XCTUnwrap(model.destinations.first)
+        let caption = model.caption
+        model.selectDestination(destination)
+        try await waitFor(model.$isCheckingPermission) { !$0 }
+        XCTAssertFalse(model.canSend)
+        XCTAssertNotNil(model.destinationPermissionMessage)
+        model.send()
+        model.retrySend()
+        let sends = await api.sentMessageRequests
+        let configurations = await api.attachmentConfigRequests
+        XCTAssertTrue(sends.isEmpty)
+        XCTAssertEqual(configurations, 0)
+        XCTAssertEqual(model.caption, caption)
+
+        await api.setAuthenticatedProfile(try shareProfile(restricted: false))
+        model.retryPermission()
+        try await waitFor(model.$isCheckingPermission) { !$0 }
+        XCTAssertTrue(model.canSend)
+        XCTAssertNil(model.destinationPermissionMessage)
+    }
+
+    func testSendPreflightCatchesRestrictionChangedAfterSelection() async throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("share-restricted-\(UUID().uuidString).png")
+        try makeMediaPNG(red: 255, green: 0, blue: 0).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let provider = NSItemProvider()
+        provider.registerFileRepresentation(
+            forTypeIdentifier: UTType.png.identifier, fileOptions: [], visibility: .all
+        ) { completion in
+            completion(file, false, nil)
+            return nil
+        }
+        let (model, api) = await loadShare(provider: provider)
+        defer { model.cancel() }
+        model.selectDestination(try XCTUnwrap(model.destinations.first))
+        try await waitFor(model.$isCheckingPermission) { !$0 }
+        XCTAssertTrue(model.canSend)
+        await api.setAuthenticatedProfile(try shareProfile(restricted: true))
+        let caption = model.caption
+        XCTAssertEqual(model.media.count, 1)
+        let mediaIDs = model.media.map(\.id)
+        model.send()
+        try await waitFor(model.$state) { $0 == .ready }
+        XCTAssertFalse(model.canSend)
+        let sends = await api.sentMessageRequests
+        let configurations = await api.attachmentConfigRequests
+        XCTAssertTrue(sends.isEmpty)
+        XCTAssertEqual(configurations, 0)
+        XCTAssertEqual(model.caption, caption)
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertEqual(model.media.map(\.id), mediaIDs)
+        XCTAssertTrue(mediaIDs.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    func testServerRestrictionRetainsFrozenRequestAndRequiresPermissionRefresh() async throws {
+        let provider = NSItemProvider(object: "Keep this shared content" as NSString)
+        let (model, api) = await loadShare(provider: provider)
+        defer { model.cancel() }
+        await api.setSendMessageFailure(
+            .http(status: 403, body: Data(#"{"reason":"groupChatWriteRestricted"}"#.utf8)))
+        model.selectDestination(try XCTUnwrap(model.destinations.first))
+        try await waitFor(model.$isCheckingPermission) { !$0 }
+        let caption = model.caption
+        model.send()
+        try await waitFor(model.$state) { $0 == .ready }
+        XCTAssertFalse(model.canSend)
+        XCTAssertFalse(model.canChangeDestination)
+        XCTAssertEqual(model.caption, caption)
+        XCTAssertNotNil(model.destinationPermissionMessage)
+        model.retrySend()
+        let first = await api.sentMessageRequests
+        XCTAssertEqual(first.count, 1)
+
+        model.retryPermission()
+        try await waitFor(model.$isCheckingPermission) { !$0 }
+        XCTAssertTrue(model.canSend, "Explicit refresh must work even with a frozen request.")
+        model.retrySend()
+        try await waitFor(model.$state) { $0 == .ready }
+        let retried = await api.sentMessageRequests
+        XCTAssertEqual(retried.count, 2)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        XCTAssertEqual(
+            try encoder.encode(XCTUnwrap(first.first).body),
+            try encoder.encode(XCTUnwrap(retried.last).body))
+    }
+
     func testDestinationRetryAfterSendFailureDoesNotResendAndPreservesFrozenRequest() async throws {
         let provider = NSItemProvider(object: "https://example.com/shared" as NSString)
         let (model, api) = await loadShare(provider: provider)
@@ -123,6 +276,7 @@ final class ShareExtensionModelTests: XCTestCase {
         let api = FakeChatAPI(
             chatResults: [.success(page), .success(page)],
             threadResults: [.failure(APIError.unavailable), .success(.init(threads: []))])
+        await api.setAuthenticatedProfile(try! shareProfile())
         await api.setConversationPageMetadata(
             group: .init(id: "recipient", myRole: .admin, kind: .group))
         let item = NSExtensionItem()
@@ -133,6 +287,15 @@ final class ShareExtensionModelTests: XCTestCase {
         XCTAssertNil(model.payloadErrorMessage)
         XCTAssertEqual(model.state, .ready)
         return (model, api)
+    }
+
+    private func shareProfile(restricted: Bool? = nil) throws -> MeResponse {
+        let profile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":17,"username":"Ada","gender":0,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        return restricted.map { profile.withGroupChatWriteRestriction($0) } ?? profile
     }
 
     private func waitFor<Value>(

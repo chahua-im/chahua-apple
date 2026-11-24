@@ -16,6 +16,45 @@ final class OutgoingMessageQueueTests: XCTestCase {
     /// Server IDs handed out by `response(_:)`, stable per client-generated ID.
     private var serverIDs: [String: UInt64] = [:]
 
+    func testGroupWriteRefusalRetainsPayloadAndRequiresManualRetryAfterRestrictionLifts()
+        async throws
+    {
+        let h = try await openHarness(foreground: false)
+        var restricted = false
+        h.queue.isWriteRestricted = { _ in restricted }
+        h.queue.onWriteRejected = { error in
+            if (error as? APIError)?.isGroupChatWriteRestricted == true { restricted = true }
+        }
+        try await h.queue.enqueueIndependentText(chatID: "chat", text: "keep this message")
+        await h.queue.setForegroundActive(true)
+        try await eventually { await h.api.requests().count == 1 }
+        let original = try await firstRequest(h.api)
+        await h.api.finish(
+            0,
+            with: .failure(
+                APIError.http(
+                    status: 403, body: Data(#"{"reason":"groupChatWriteRestricted"}"#.utf8))))
+        try await eventually { h.queue.pendingMessages(chatID: "chat").first?.state == .failed }
+        let failed = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        XCTAssertEqual(failed.failure?.reason, .groupChatWriteRestricted)
+        XCTAssertEqual(failed.failure?.retry, .manual)
+        XCTAssertEqual(failed.text, "keep this message")
+        do {
+            try await h.queue.retry(chatID: "chat", clientGeneratedID: failed.clientGeneratedID)
+            XCTFail("Retry must not bypass the current restriction")
+        } catch SpeakingWriteError.groupChatWriteRestricted {}
+        restricted = false
+        h.queue.writePermissionsDidChange()
+        let beforeRetry = await h.api.requests()
+        XCTAssertEqual(beforeRetry.count, 1)
+        try await h.queue.retry(chatID: "chat", clientGeneratedID: failed.clientGeneratedID)
+        try await eventually { await h.api.requests().count == 2 }
+        let requests = await h.api.requests()
+        XCTAssertEqual(requests[1].body, original.body)
+        await h.api.finish(1, with: .success(try response(requests[1])))
+        try await eventually { h.queue.pendingMessages(chatID: "chat").isEmpty }
+    }
+
     func testStructuredConflictSettlesServerCopyAndUnblocksFIFO() async throws {
         let h = try await openHarness(foreground: false)
         var delivered: [MessageResponse] = []

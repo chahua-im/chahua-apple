@@ -99,11 +99,19 @@ struct GroupInvitesView: View {
                 }
                 Section("Send invite card") {
                     NavigationLink(destination?.name ?? "Choose destination group") {
-                        GroupInviteGroupPicker(store: store, title: "Destination Group") {
-                            guard authorized, !busy else { return }
+                        GroupInviteGroupPicker(
+                            store: store, title: "Destination Group", requiresContentWrite: true
+                        ) {
+                            guard authorized, !busy, !groupChatWriteRestricted else { return }
                             destination = $0
                         }
                         .voicePlaybackHeader()
+                    }
+                    .disabled(groupChatWriteRestricted)
+                    if groupChatWriteRestricted {
+                        Text("Your user group cannot post in group chats.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                     Text("Sends an invitation card, not a forwarded message.").font(.footnote)
                         .foregroundStyle(.secondary)
@@ -129,7 +137,7 @@ struct GroupInvitesView: View {
                                 Button("Send card") {
                                     operationTask = Task { await share(invite) }
                                 }
-                                .disabled(destination == nil)
+                                .disabled(destination == nil || groupChatWriteRestricted)
                                 Button("Revoke", role: .destructive) { revoking = invite }
                             }
                             .disabled(busy || !invite.isActive)
@@ -196,6 +204,10 @@ struct GroupInvitesView: View {
         let info = store.groupInfoByChatID[chatID] ?? groupInfo
         return isCurrentSession && !accessRevoked && info?.kind == .group
             && info?.myRole == .admin
+    }
+
+    private var groupChatWriteRestricted: Bool {
+        store.currentUserProfile?.groupChatWriteRestricted == true
     }
 
     private var isDirty: Bool {
@@ -287,6 +299,10 @@ struct GroupInvitesView: View {
 
     private func share(_ invite: GroupInvite) async {
         guard !Task.isCancelled, authorized, !busy, let destination, invite.isActive else { return }
+        guard !groupChatWriteRestricted else {
+            error = AppLanguage.localized("Your user group cannot post in group chats.")
+            return
+        }
         busy = true
         refreshExitProtection()
         error = nil
@@ -308,7 +324,10 @@ struct GroupInvitesView: View {
             notice = "Invitation card sent."
         } catch is CancellationError {} catch {
             guard authorized, !Task.isCancelled else { return }
-            self.error = error.localizedDescription
+            self.error =
+                (error as? APIError)?.isGroupChatWriteRestricted == true
+                ? AppLanguage.localized("Your user group cannot post in group chats.")
+                : error.localizedDescription
         }
     }
 
@@ -362,8 +381,9 @@ private struct GroupInviteUserPicker: View {
 }
 
 private struct GroupInviteGroupPicker: View {
-    let store: ChatStore
+    @ObservedObject var store: ChatStore
     let title: LocalizedStringKey
+    var requiresContentWrite = false
     let onSelect: (SocialGroupSummary) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -374,8 +394,16 @@ private struct GroupInviteGroupPicker: View {
     @State private var error: String?
     @State private var loaded = false
 
+    private var groupChatWriteRestricted: Bool {
+        requiresContentWrite && store.currentUserProfile?.groupChatWriteRestricted == true
+    }
+
     var body: some View {
         List {
+            if groupChatWriteRestricted {
+                Text("Your user group cannot post in group chats.")
+                    .foregroundStyle(.secondary)
+            }
             TextField("Search joined groups", text: $query).onSubmit {
                 Task { await load(more: false) }
             }
@@ -393,9 +421,11 @@ private struct GroupInviteGroupPicker: View {
             if loaded && groups.isEmpty { Text("No matching joined groups") }
             ForEach(groups) { group in
                 Button(group.name) {
+                    guard !groupChatWriteRestricted else { return }
                     onSelect(group)
                     dismiss()
                 }
+                .disabled(groupChatWriteRestricted)
             }
             if cursor != nil {
                 Button("Load more") { Task { await load(more: true) } }.disabled(loading)

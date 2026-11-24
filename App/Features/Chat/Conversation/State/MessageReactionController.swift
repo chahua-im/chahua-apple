@@ -7,6 +7,8 @@ import Foundation
 final class MessageReactionController: ObservableObject {
     @Published private(set) var pendingMessageIDs = Set<MessageID>()
     @Published var error: String?
+    var isWriteRestricted: (@MainActor (String) -> Bool)?
+    var onWriteRejected: (@MainActor (Error) -> Void)?
 
     private let apiClient: any ChahuaAPIClient
     private let messageStore: ConversationMessageStore
@@ -96,6 +98,7 @@ final class MessageReactionController: ObservableObject {
     ) async {
         do {
             try checkSession(requestGeneration)
+            try requireWritePermission(chatID: message.chatId)
             // Even an open menu can hold stale personalized state. Read before choosing
             // PUT versus DELETE; a truncated broadcast reactor list cannot prove false.
             let authoritative = try await readBeforeMutation(message, generation: requestGeneration)
@@ -116,6 +119,7 @@ final class MessageReactionController: ObservableObject {
                 }
             }
 
+            try requireWritePermission(chatID: message.chatId)
             if removing == true {
                 try await apiClient.deleteReaction(
                     chatID: message.chatId, messageID: message.id, emoji: emoji)
@@ -140,10 +144,23 @@ final class MessageReactionController: ObservableObject {
         } catch {
             guard generation == requestGeneration, !(error is CancellationError), !Task.isCancelled
             else { return }
-            self.error =
-                (error as? Failure)?.message
-                ?? AppLanguage.localized("Couldn’t update reaction. Please try again.")
+            onWriteRejected?(error)
+            if (error as? APIError)?.isGroupChatWriteRestricted == true
+                || isWriteRestricted?(message.chatId) == true
+            {
+                self.error = SpeakingWriteError.groupChatWriteRestricted.localizedDescription
+            } else {
+                self.error =
+                    (error as? Failure)?.message
+                    ?? AppLanguage.localized("Couldn’t update reaction. Please try again.")
+            }
             if case APIError.invalidToken = error { await onInvalidToken() }
+        }
+    }
+
+    private func requireWritePermission(chatID: String) throws {
+        if isWriteRestricted?(chatID) == true {
+            throw SpeakingWriteError.groupChatWriteRestricted
         }
     }
 

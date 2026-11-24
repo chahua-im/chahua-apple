@@ -4,6 +4,7 @@ import Foundation
 struct MessageInteractionContext: Equatable {
     var isDM = false
     var canWrite = false
+    var groupChatWriteRestricted = false
     var isAdmin = false
     var isThreadView = false
     var isPinned = false
@@ -17,7 +18,12 @@ struct MessageInteractionContext: Equatable {
     var isSendPermissionResolved = true
     var savedSendDecision: Bool?
 
+    var canWriteContent: Bool {
+        canWrite && (isDM || !groupChatWriteRestricted)
+    }
+
     var resolvedSendDecision: Bool? {
+        if !isDM && groupChatWriteRestricted { return false }
         guard !isReadOnly, canUseNetworkActions, isSendPermissionResolved else { return nil }
         return canSendOnline(isThreadReply: isThreadView)
     }
@@ -32,7 +38,7 @@ struct MessageInteractionContext: Equatable {
 
     // Published edits cannot use destination evidence saved for local enqueue.
     func canSendOnline(isThreadReply: Bool) -> Bool {
-        guard !isReadOnly, canUseNetworkActions, canWrite, isSendPermissionResolved else {
+        guard !isReadOnly, canUseNetworkActions, canWriteContent, isSendPermissionResolved else {
             return false
         }
         if isDM || isAdmin { return true }
@@ -43,18 +49,21 @@ struct MessageInteractionContext: Equatable {
     }
 
     var canCreateThread: Bool {
-        canUseNetworkActions && canWrite && !isReadOnly
+        canUseNetworkActions && canWriteContent && !isReadOnly
             && (isDM || isAdmin || speakingMode?.allowsThreadCreation == true)
     }
 }
 
 enum SpeakingWriteError: LocalizedError {
     case restricted(SpeakingMode)
+    case groupChatWriteRestricted
     case unavailable
 
     var errorDescription: String? {
         switch self {
         case .restricted(let mode): mode.restrictionExplanation
+        case .groupChatWriteRestricted:
+            AppLanguage.localized("Your user group cannot post in group chats.")
         case .unavailable:
             AppLanguage.localized("Couldn’t verify permission to send. Please try again.")
         }
@@ -138,7 +147,7 @@ struct MessageActionPolicy {
     }
 
     var canReact: Bool {
-        context.canUseNetworkActions && !context.isReadOnly && context.canWrite
+        context.canUseNetworkActions && !context.isReadOnly && context.canWriteContent
             && !isDeleted && !isPending
             && messageType != .system && messageType != .sticker && messageType != .invite
     }
@@ -200,7 +209,7 @@ struct MessageActionPolicy {
                 && !isForwarded
                 ? .enabled : .hidden
         case .delete:
-            return context.canWrite && (isOwn || context.isAdmin) ? .enabled : .hidden
+            return context.canWriteContent && (isOwn || context.isAdmin) ? .enabled : .hidden
         case .select:
             return .enabled
         case .forward:

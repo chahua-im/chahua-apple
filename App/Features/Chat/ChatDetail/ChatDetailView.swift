@@ -277,6 +277,9 @@ struct ChatDetailView: View {
             .onChange(of: observation.permissions) { _, _ in
                 persistResolvedSendDecision()
             }
+            .onChange(of: observation.groupChatWriteRestricted) { _, _ in
+                persistResolvedSendDecision()
+            }
             .onChange(of: observation.threadReplyCount) { _, count in
                 forwardingThreadReplyCount = count
             }
@@ -364,13 +367,16 @@ struct ChatDetailView: View {
                     set: { if !$0 { outboxAction = nil } }),
                 titleVisibility: .visible, presenting: outboxActionTarget
             ) { target in
-                if target.phase.isFailed {
+                if target.phase.isFailed, !currentInteractionContext.groupChatWriteRestricted {
                     Button("Retry") { retryOutgoing(target.id) }
                 }
                 Button("Remove from Outbox", role: .destructive) { removeOutgoing(target) }
                 Button("Cancel", role: .cancel) {}
             } message: { target in
                 Text(target.detail)
+                if currentInteractionContext.groupChatWriteRestricted {
+                    Text("Your user group cannot post in group chats.")
+                }
             }
             .modifier(
                 ChatDetailMutationErrors(
@@ -468,6 +474,9 @@ struct ChatDetailView: View {
                     store: store, currentUserID: model.currentUserID,
                     messageToDelete: $messageToDelete, editingMessage: $editingMessage,
                     deleteError: $deleteError, canDelete: canDeleteMessage,
+                    groupChatWriteRestricted: {
+                        currentInteractionContext.groupChatWriteRestricted
+                    },
                     cancelEditing: cancelEditing)
             )
             .modifier(
@@ -566,7 +575,7 @@ struct ChatDetailView: View {
 
     private func canDeleteSelection(_ messages: [MessageResponse]) -> Bool {
         let context = currentInteractionContext
-        return context.canUseNetworkActions && context.canWrite && !messages.isEmpty
+        return context.canUseNetworkActions && context.canWriteContent && !messages.isEmpty
             && messages.count <= 100
             && messages.allSatisfy { $0.chatId == chat.id }
             && messages.allSatisfy {
@@ -793,10 +802,8 @@ struct ChatDetailView: View {
                                         )
                                 }
                                 let context = currentInteractionContext
-                                if context.canUseNetworkActions, context.canWrite, !canUseComposer,
-                                    let mode = context.speakingMode
-                                {
-                                    Text(mode.restrictionExplanation)
+                                if let explanation = composerRestrictionExplanation {
+                                    Text(explanation)
                                         .font(.callout)
                                         .foregroundStyle(.secondary)
                                         .multilineTextAlignment(.center)
@@ -1064,6 +1071,11 @@ struct ChatDetailView: View {
         // store at invocation, rather than authorizing against that UI snapshot.
         var context = interactionContext
         context.canUseNetworkActions = store.canFetchHistory
+        // A restored route can know its kind before the store hydrates its list/info cache.
+        context.groupChatWriteRestricted =
+            store.groupChatWriteRestricted(chatID: chat.id)
+            || (chat.kind == .group
+                && store.currentUserProfile?.groupChatWriteRestricted == true)
         guard isCurrentSession else {
             context.canWrite = false
             context.isReadOnly = true
@@ -1192,7 +1204,8 @@ struct ChatDetailView: View {
             actions.removablePendingMessageIDs = Set(
                 pending.filter { $0.state != .sending }.map(\.clientGeneratedID))
             actions.editablePendingMessageIDs = Set(
-                pending.filter(\.isEditable).map(\.clientGeneratedID))
+                pending.filter { $0.isEditable && !context.groupChatWriteRestricted }
+                    .map(\.clientGeneratedID))
         }
         actions.editPendingMessage = startPendingEditing
         actions.removePendingMessage = { pending in
@@ -1243,7 +1256,7 @@ struct ChatDetailView: View {
             }
         }
         actions.editMessage = startEditing
-        if context.canUseNetworkActions, context.canWrite {
+        if context.canUseNetworkActions, context.canWriteContent {
             actions.deleteMessage = { message in
                 guard canDeleteMessage(message) else { return }
                 messageToDelete = message
@@ -1267,7 +1280,7 @@ struct ChatDetailView: View {
 
     private func canDeleteMessage(_ message: MessageResponse) -> Bool {
         let context = currentInteractionContext
-        return context.canWrite && !store.deletingMessageIDs.contains(message.id)
+        return context.canWriteContent && !store.deletingMessageIDs.contains(message.id)
             && MessageActionPolicy(
                 messageType: message.messageType, isDeleted: message.isDeleted,
                 isOwn: message.sender.uid == model.currentUserID, context: context
@@ -1315,8 +1328,19 @@ struct ChatDetailView: View {
         pendingEditSession?.id ?? editingMessage.map { _ in serverEditIdentity }
     }
 
+    private var composerRestrictionExplanation: String? {
+        let context = currentInteractionContext
+        if context.groupChatWriteRestricted {
+            return AppLanguage.localized("Your user group cannot post in group chats.")
+        }
+        guard context.canUseNetworkActions, context.canWrite, !canUseComposer else { return nil }
+        return context.speakingMode?.restrictionExplanation
+    }
+
     private var canUseComposer: Bool {
-        guard isCurrentSession else { return false }
+        guard isCurrentSession, !currentInteractionContext.groupChatWriteRestricted else {
+            return false
+        }
         if let session = pendingEditSession {
             return session.isValid
         }
@@ -1719,7 +1743,7 @@ struct ChatDetailView: View {
     }
 
     private func startPendingEditing(_ pending: PendingOutgoingMessage) {
-        guard isCurrentSession,
+        guard isCurrentSession, !currentInteractionContext.groupChatWriteRestricted,
             pending.chatID == chat.id, pending.threadID == threadID,
             pending.canEdit,
             pending.senderID == model.currentUserID,
@@ -1733,7 +1757,9 @@ struct ChatDetailView: View {
     }
 
     private func beginPendingEditing(_ pending: PendingOutgoingMessage) {
-        guard isCurrentSession, isTimelineVisible else { return }
+        guard isCurrentSession, isTimelineVisible,
+            !currentInteractionContext.groupChatWriteRestricted
+        else { return }
         let session: PendingEditSession
         do {
             // Install the hold before yielding for native input or a draft flush.
@@ -1752,7 +1778,8 @@ struct ChatDetailView: View {
             }
             do {
                 try await prepareComposerForEditing()
-                guard isCurrentSession, isTimelineVisible, session.isValid, !Task.isCancelled
+                guard isCurrentSession, isTimelineVisible, session.isValid, !Task.isCancelled,
+                    !currentInteractionContext.groupChatWriteRestricted
                 else { return }
                 cancelEditing()
                 pendingEditSession = session
@@ -1857,6 +1884,9 @@ struct ChatDetailView: View {
     private func retryOutgoing(_ id: String) {
         Task {
             do {
+                guard !currentInteractionContext.groupChatWriteRestricted else {
+                    throw SpeakingWriteError.groupChatWriteRestricted
+                }
                 guard removableOutgoing(id)?.phase.isFailed == true else { return }
                 try await outgoingQueue.retry(
                     chatID: chat.id, threadID: threadID, clientGeneratedID: id)

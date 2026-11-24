@@ -198,7 +198,14 @@ struct ForwardPickerContent: View {
                     model.choose(.conversation(target))
                 } label: {
                     HStack(spacing: 12) {
-                        conversationIdentity(target)
+                        VStack(alignment: .leading, spacing: 4) {
+                            conversationIdentity(target)
+                            if model.groupChatWriteRestricted(for: target) {
+                                Text("Your user group cannot post in group chats.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                         destinationChevron
                     }
                     .padding(12)
@@ -206,7 +213,7 @@ struct ForwardPickerContent: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(model.selectionBlocked)
+                .disabled(model.selectionBlocked || model.groupChatWriteRestricted(for: target))
                 if target.id != targets.last?.id {
                     Divider().padding(.leading, 64)
                 }

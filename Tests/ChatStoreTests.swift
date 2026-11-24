@@ -1314,6 +1314,84 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(root.rows.compactMap(\.messageID), rootMessages.map(\.id))
     }
 
+    func testGroupChatWriteRestrictionIncludesAdminsAndCachedOfflinePermissions() async throws {
+        let api = FakeChatAPI()
+        let (store, queue, _, _) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        let profile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":0,"stickerPackOrder":[],"permissions":[],"groupChatWriteRestricted":false}"#
+                    .utf8))
+        store.currentUserProfile = profile
+        let key = ConversationKey(chatID: "group")
+        await api.setConversationPageMetadata(
+            group: .init(id: key.chatID, myRole: .admin, kind: .group))
+        try await store.prepareForwardDestination(key)
+        XCTAssertEqual(store.currentSavedSendDecision(for: key), true)
+        store.currentUserProfile = profile.withGroupChatWriteRestriction(true)
+        XCTAssertEqual(store.currentSavedSendDecision(for: key), false)
+        queue.setNetworkReachable(false)
+        do {
+            try await store.prepareForwardDestination(key)
+            XCTFail("Cached offline permission must not bypass the account restriction")
+        } catch SpeakingWriteError.groupChatWriteRestricted {}
+        queue.setNetworkReachable(true)
+        for threadID in [nil, "42"] {
+            do {
+                try await store.requireSpeakingPermission(chatID: key.chatID, threadID: threadID)
+                XCTFail("Administrators must not bypass the account restriction")
+            } catch SpeakingWriteError.groupChatWriteRestricted {}
+        }
+        let message = try TimelineTestFixtures.message(id: 1, chatID: key.chatID, at: 1)
+        let deleted = await store.deleteMessage(message)
+        XCTAssertFalse(deleted)
+        do {
+            _ = try await store.bulkRecallMessages([message])
+            XCTFail("Bulk recall must obey the account restriction")
+        } catch SpeakingWriteError.groupChatWriteRestricted {}
+        XCTAssertTrue(store.groupChatWriteRestricted(chatID: key.chatID))
+        store.retainChatForNavigation(
+            .init(id: "dm", unreadCount: 0, archived: false, kind: .dm))
+        XCTAssertFalse(store.groupChatWriteRestricted(chatID: "dm"))
+        try await store.requireSpeakingPermission(chatID: "dm", threadID: nil)
+    }
+
+    func testGroupChatWriteRefusalFencesAnOlderProfileRefreshAndLaterRefreshCanLiftIt()
+        async throws
+    {
+        let api = FakeChatAPI()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        let profile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":0,"stickerPackOrder":[],"permissions":[],"groupChatWriteRestricted":false}"#
+                    .utf8))
+        store.currentUserProfile = profile
+        await api.setAuthenticatedProfile(profile)
+        let message = try TimelineTestFixtures.message(id: 1, chatID: "group", at: 1)
+        await api.setDeleteMessageFailure(.http(status: 403, body: Data()))
+        let ordinaryFailure = await store.deleteMessage(message)
+        XCTAssertFalse(ordinaryFailure)
+        XCTAssertEqual(store.currentUserProfile?.groupChatWriteRestricted, false)
+
+        await api.holdNextMeRequest()
+        let refresh = Task { await store.refreshGroupChatWriteRestriction() }
+        await api.waitForMeRequest()
+        await api.setDeleteMessageFailure(
+            .http(status: 403, body: Data(#"{"reason":"groupChatWriteRestricted"}"#.utf8)))
+        let refused = await store.deleteMessage(message)
+        XCTAssertFalse(refused)
+        XCTAssertEqual(store.currentUserProfile?.groupChatWriteRestricted, true)
+        await api.releaseMeRequest(profile)
+        await refresh.value
+        XCTAssertEqual(store.currentUserProfile?.groupChatWriteRestricted, true)
+        await store.refreshGroupChatWriteRestriction()
+        XCTAssertEqual(store.currentUserProfile?.groupChatWriteRestricted, false)
+    }
+
     func testSpeakingEventsAndMutationsFenceLateGroupInfoResponses() async throws {
         let unrestricted = GroupInfoResponse(
             id: "group", myRole: .member, kind: .group, speakingMode: .unrestricted,
@@ -3906,6 +3984,7 @@ final class ChatStoreTests: XCTestCase {
         await api.setSaveResult(snapshot)
         try await h.store.savedMessages.save(source)
         let savedRevision = h.store.savedMessages.revision
+        h.store.currentUserProfile = h.store.currentUserProfile?.withGroupChatWriteRestriction(true)
         let model = ForwardDestinationPickerModel(
             store: h.store, sources: [source], loadSources: nil)
         model.start()
@@ -3932,6 +4011,91 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(h.store.savedMessages.items.first?.message, "Captured text")
         XCTAssertEqual(h.store.savedMessages.revision, savedRevision)
         XCTAssertTrue(h.queue.pendingMessages(chatID: source.chatId).isEmpty)
+    }
+
+    func testForwardPickerRejectsRestrictedGroupsAndThreadsButKeepsDMAndSavedChoices() async throws
+    {
+        let h = try await openDraftHarness()
+        h.store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[],"groupChatWriteRestricted":true}"#
+                    .utf8))
+        let source = try TimelineTestFixtures.message(id: 10, chatID: "source", at: 0)
+        let model = ForwardDestinationPickerModel(
+            store: h.store, sources: [source], loadSources: nil)
+        model.start()
+        defer { model.stop() }
+        for kind in [ChatKind.group, .dm] {
+            let chat = ConversationListItem.chat(
+                .init(id: "destination", unreadCount: 0, archived: false, kind: kind))
+            let thread = ConversationListItem.thread(
+                .init(
+                    chatId: "destination", chatName: "Destination",
+                    threadRootMessage: source.replyPreview, replyCount: 1,
+                    lastReplyAt: source.createdAt, unreadCount: 0, chatKind: kind,
+                    subscribedAt: source.createdAt, archived: false))
+            for destination in [chat, thread] {
+                if kind == .group {
+                    model.choose(.conversation(destination))
+                    XCTAssertEqual(model.failure, .groupChatWriteRestricted)
+                    XCTAssertNil(model.selectedTarget)
+                    XCTAssertTrue(model.submitBlocked)
+                } else {
+                    try await chooseForwardDestination(.conversation(destination), in: model)
+                    XCTAssertNil(model.destinationIssue)
+                    XCTAssertFalse(model.submitBlocked)
+                    model.changeDestination()
+                }
+            }
+        }
+        try await chooseForwardDestination(.saved, in: model)
+        XCTAssertNil(model.destinationIssue)
+        XCTAssertFalse(model.submitBlocked)
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "destination").isEmpty)
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "source").isEmpty)
+    }
+
+    func testForwardPickerLiveRestrictionOverridesOfflineSavedDecisionAndKeepsDraft() async throws {
+        let h = try await openDraftHarness()
+        let profile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        h.store.currentUserProfile = profile
+        let source = try TimelineTestFixtures.message(id: 10, chatID: "source", at: 0)
+        let destination = ConversationListItem.chat(
+            .init(id: "chat", unreadCount: 0, archived: false, kind: .group))
+        let key = ConversationKey(chatID: "chat")
+        h.store.rememberSendDecision(true, for: key)
+        h.store.drafts.setDraftText("Keep this draft", chatID: "chat")
+        h.store.drafts.setDraftReply(source.replyPreview, chatID: "chat")
+        let observation = ChatDetailObservation(store: h.store, chatID: "chat", threadID: nil)
+        let model = ForwardDestinationPickerModel(
+            store: h.store, sources: [source], loadSources: nil)
+        model.start()
+        defer { model.stop() }
+        try await chooseForwardDestination(.conversation(destination), in: model)
+        h.store.setNetworkAuthorized(false)
+        XCTAssertEqual(h.store.currentSavedSendDecision(for: key), true)
+        XCTAssertFalse(model.submitBlocked)
+        XCTAssertFalse(observation.groupChatWriteRestricted)
+
+        h.store.currentUserProfile = profile.withGroupChatWriteRestriction(true)
+        XCTAssertTrue(observation.groupChatWriteRestricted)
+        XCTAssertEqual(
+            model.destinationIssue,
+            AppLanguage.localized("Your user group cannot post in group chats."))
+        XCTAssertTrue(model.submitBlocked)
+        var completed = false
+        model.send { completed = true }
+        XCTAssertFalse(completed)
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "Keep this draft")
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), source.replyPreview)
+        h.store.currentUserProfile = profile
+        XCTAssertFalse(observation.groupChatWriteRestricted)
     }
 
     private func chooseForwardDestination(
@@ -5433,6 +5597,14 @@ actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionPro
     private(set) var sentMessageRequests: [(chatID: String, body: CreateMessageBody)] = []
     private(set) var attachmentConfigRequests = 0
     private(set) var attachmentUploadRequests = 0
+    private var sendMessageFailure: APIError = .unavailable
+    private var shareFriendRelationship: FriendRelationshipResponse?
+
+    func setSendMessageFailure(_ error: APIError) { sendMessageFailure = error }
+    func setDeleteMessageFailure(_ error: APIError) { deleteResults = [.failure(error)] }
+    func setShareFriendRelationship(_ relationship: FriendRelationshipResponse) {
+        shareFriendRelationship = relationship
+    }
 
     func updateGroup(chatID: String, body: UpdateGroupBody) async throws -> GroupInfoResponse {
         let index = groupUpdateBodies.count
@@ -6047,7 +6219,8 @@ actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionPro
         try removeMemberResults.removeFirst().get()
     }
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
-        throw APIError.unavailable
+        guard let shareFriendRelationship else { throw APIError.unavailable }
+        return shareFriendRelationship
     }
     func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
         readTargetLookups.append(messageID)
@@ -6188,7 +6361,10 @@ actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionPro
     func recordedThreadQueries() -> [ListThreadsQuery] { threadQueries }
     func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws
         -> MessageResponse
-    { throw APIError.unavailable }
+    {
+        sentMessageRequests.append((chatID, body))
+        throw sendMessageFailure
+    }
 
     private var differenceResults: [Result<ConversationDifference, Error>] = []
     private var differenceCursors: [String?] = []
@@ -6268,7 +6444,7 @@ actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionPro
 
     func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse {
         sentMessageRequests.append((chatID, body))
-        throw APIError.unavailable
+        throw sendMessageFailure
     }
 
     func waitForChatRequest() async {

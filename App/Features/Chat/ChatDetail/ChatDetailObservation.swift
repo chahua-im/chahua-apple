@@ -26,6 +26,7 @@ final class ChatDetailObservation: ObservableObject {
     @Published private(set) var session: Session
     @Published private(set) var canFetchHistory: Bool
     @Published private(set) var savedSendDecision: Bool?
+    @Published private(set) var groupChatWriteRestricted: Bool
     private let initialSession: Session
     private var observations = Set<AnyCancellable>()
 
@@ -33,6 +34,7 @@ final class ChatDetailObservation: ObservableObject {
 
     init(store: ChatStore, chatID: String, threadID: String?) {
         permissions = Permissions(store.groupInfoByChatID[chatID])
+        groupChatWriteRestricted = store.currentUserProfile?.groupChatWriteRestricted == true
         canFetchHistory = store.canFetchHistory
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         savedSendDecision = store.currentSavedSendDecision(for: key)
@@ -50,6 +52,13 @@ final class ChatDetailObservation: ObservableObject {
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] in self?.permissions = $0 }
+            .store(in: &observations)
+
+        store.$currentUserProfile
+            .map { $0?.groupChatWriteRestricted == true }
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] in self?.groupChatWriteRestricted = $0 }
             .store(in: &observations)
 
         store.$canFetchHistory

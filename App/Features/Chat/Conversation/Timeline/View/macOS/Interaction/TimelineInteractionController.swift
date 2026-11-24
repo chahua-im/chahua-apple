@@ -71,7 +71,7 @@
                     guard let self, let timelineView = self.timelineView else { return }
                     self.open(row: row, source: source, in: timelineView)
                 } : nil
-            if !context.canWrite { result.toggleReaction = nil }
+            if !context.canWriteContent { result.toggleReaction = nil }
             if target != nil || !context.canStageDraft { result.replyToMessage = nil }
             return result
         }

@@ -391,6 +391,43 @@ final class ChahuaAPITests: XCTestCase {
         }
     }
 
+    func testGroupChatWriteRestrictionProfileIsBackwardCompatibleAndCopyable() throws {
+        let legacy = Data(
+            #"{"uid":17,"username":"Ada","gender":0,"stickerPackOrder":[],"permissions":[]}"#.utf8)
+        let profile = try JSONDecoder().decode(MeResponse.self, from: legacy)
+        XCTAssertNil(profile.groupChatWriteRestricted)
+        for restricted in [false, true] {
+            let updated = profile.withGroupChatWriteRestriction(restricted)
+            let encoded = try JSONEncoder().encode(updated)
+            let decoded = try JSONDecoder().decode(MeResponse.self, from: encoded)
+            XCTAssertEqual(decoded.groupChatWriteRestricted, restricted)
+            XCTAssertEqual(decoded.uid, profile.uid)
+            XCTAssertEqual(decoded.username, profile.username)
+        }
+        XCTAssertNil(profile.groupChatWriteRestricted, "Copying must not mutate the original.")
+    }
+
+    func testGroupChatWriteRestrictionRequiresExactStructuredForbiddenReason() {
+        let body = Data(#"{"reason":"groupChatWriteRestricted"}"#.utf8)
+        XCTAssertTrue(APIError.http(status: 403, body: body).isGroupChatWriteRestricted)
+        XCTAssertFalse(APIError.http(status: 400, body: body).isGroupChatWriteRestricted)
+        XCTAssertFalse(
+            APIError.retryableHTTP(status: 403, body: body, retryAfter: .distantPast)
+                .isGroupChatWriteRestricted)
+        for invalid in [
+            #"{"reason":"forbidden"}"#,
+            #"{"code":"groupChatWriteRestricted"}"#,
+            #"{"reason":"groupChatWriteRestricted "}"#,
+            #"{"reason":true}"#, #"{"reason":null}"#,
+            #""groupChatWriteRestricted""#, "groupChatWriteRestricted",
+        ] {
+            XCTAssertFalse(
+                APIError.http(status: 403, body: Data(invalid.utf8)).isGroupChatWriteRestricted,
+                invalid)
+        }
+        XCTAssertFalse(APIError.invalidResponse(statusCode: 403).isGroupChatWriteRestricted)
+    }
+
     func testPresenceSettingsFailuresDoNotReturnDefaultPolicy() async throws {
         let client: any ChahuaAPIClient = ChahuaClient(
             configuration: .init(baseURL: URL(string: "https://api.example")!),

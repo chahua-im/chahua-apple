@@ -20874,6 +20874,28 @@
           }
         }
       }
+    },
+    "Your user group cannot post in group chats." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your user group cannot post in group chats."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前用户组禁止发言"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前的使用者群組禁止發言"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

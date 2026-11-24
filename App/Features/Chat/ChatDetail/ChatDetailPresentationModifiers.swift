@@ -264,6 +264,7 @@ struct ChatDetailDeletionPresentation: ViewModifier {
     @Binding var editingMessage: MessageResponse?
     @Binding var deleteError: Bool
     let canDelete: (MessageResponse) -> Bool
+    let groupChatWriteRestricted: () -> Bool
     let cancelEditing: () -> Void
 
     func body(content: Content) -> some View {
@@ -298,6 +299,10 @@ struct ChatDetailDeletionPresentation: ViewModifier {
             }
             .alert("Failed to delete message", isPresented: $deleteError) {
                 Button("OK") {}
+            } message: {
+                if groupChatWriteRestricted() {
+                    Text("Your user group cannot post in group chats.")
+                }
             }
     }
 }

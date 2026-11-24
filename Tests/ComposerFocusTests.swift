@@ -417,6 +417,27 @@ final class ComposerFocusTests: XCTestCase {
         let reply = try XCTUnwrap(actions()?.replyToMessage)
         reply(remote)
         try await waitUntil { store.drafts.draftReply(chatID: "chat") == remote.replyPreview }
+        let unrestrictedProfile = try XCTUnwrap(store.currentUserProfile)
+        let staleEdit = try XCTUnwrap(actions()?.editMessage)
+        store.currentUserProfile = unrestrictedProfile.withGroupChatWriteRestriction(true)
+        try await waitUntil {
+            actions()?.interactionContext.groupChatWriteRestricted == true && editor() == nil
+        }
+        XCTAssertNil(editor())
+        XCTAssertFalse(actions()?.interactionContext.canSend == true)
+        XCTAssertFalse(actions()?.interactionContext.canWriteContent == true)
+        XCTAssertNil(actions()?.toggleReaction)
+        XCTAssertNil(actions()?.deleteMessage)
+        staleEdit(remote)
+        try await pause()
+        XCTAssertNil(editor(), "A stale menu must not enter editing after the live refusal.")
+        XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Ordinary draft")
+        XCTAssertEqual(store.drafts.draftReply(chatID: "chat"), remote.replyPreview)
+        XCTAssertEqual(queue.draftAttachments(chatID: "chat").map(\.id), ordinaryMediaIDs)
+        try capture("Restricted admin sees ban instead of composer with draft retained")
+        store.currentUserProfile = unrestrictedProfile
+        try await waitUntil { text() == "Ordinary draft" }
+        XCTAssertEqual(text(), "Ordinary draft")
         let editRemote = try XCTUnwrap(actions()?.editMessage)
         editRemote(remote)
         try await waitUntil { text() == "Server original" }
@@ -425,6 +446,17 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Ordinary draft")
         XCTAssertEqual(store.drafts.draftReply(chatID: "chat"), remote.replyPreview)
         try capture("Server edit retains ordinary draft media before queued edit entry")
+        store.currentUserProfile = unrestrictedProfile.withGroupChatWriteRestriction(true)
+        try await waitUntil {
+            actions()?.interactionContext.groupChatWriteRestricted == true && editor() == nil
+        }
+        XCTAssertNil(editor())
+        XCTAssertFalse(actions()?.interactionContext.canSend == true)
+        XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Ordinary draft")
+        try capture("Live restriction hides published-message editor without discarding its text")
+        store.currentUserProfile = unrestrictedProfile
+        try await waitUntil { text() == "Server original" }
+        XCTAssertEqual(text(), "Server original")
 
         store.setNetworkAuthorized(false)
         try await waitUntil { actions()?.interactionContext.canUseNetworkActions == false }
@@ -441,6 +473,18 @@ final class ComposerFocusTests: XCTestCase {
                 $0.clientGeneratedID == pending.id
             })
         try capture("Queued edit header while ordinary draft media stays separate")
+        store.currentUserProfile = unrestrictedProfile.withGroupChatWriteRestriction(true)
+        try await waitUntil {
+            actions()?.interactionContext.groupChatWriteRestricted == true && editor() == nil
+        }
+        XCTAssertNil(editor())
+        XCTAssertFalse(actions()?.interactionContext.canSend == true)
+        XCTAssertFalse(actions()?.canEditPendingMessage(pending) == true)
+        XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Ordinary draft")
+        try capture("Offline restricted admin cannot submit retained pending edit")
+        store.currentUserProfile = unrestrictedProfile
+        try await waitUntil { text() == "Queued original" }
+        XCTAssertEqual(text(), "Queued original")
 
         #if os(macOS)
             let input = try XCTUnwrap(editor())

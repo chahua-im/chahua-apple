@@ -163,6 +163,82 @@ final class MessageActionPolicyTests: XCTestCase {
         }
     }
 
+    func testGroupWriteRestrictionBlocksMemberAndAdminContentButPreservesHistoryAndPins() {
+        for isAdmin in [false, true] {
+            for isThreadView in [false, true] {
+                let context = MessageInteractionContext(
+                    canWrite: true, groupChatWriteRestricted: true, isAdmin: isAdmin,
+                    isThreadView: isThreadView, canSave: true, speakingMode: .unrestricted,
+                    hasExistingThread: true, savedSendDecision: true)
+                let policy = MessageActionPolicy(
+                    messageType: .text, text: "Own message", isOwn: true, hasReactions: true,
+                    isThreadReply: isThreadView, context: context)
+                XCTAssertTrue(context.canWrite)
+                XCTAssertFalse(context.canWriteContent)
+                XCTAssertFalse(context.canStageDraft)
+                XCTAssertFalse(context.canSend)
+                XCTAssertFalse(context.canSendOnline(isThreadReply: isThreadView))
+                XCTAssertFalse(context.canCreateThread)
+                XCTAssertFalse(policy.canReact)
+                for action in [MessageMenuAction.reply, .thread, .edit, .delete] {
+                    XCTAssertEqual(policy.availability(of: action), .hidden)
+                }
+                for action in [
+                    MessageMenuAction.copy, .copyLink, .forward, .save, .select, .reactionDetails,
+                ] {
+                    XCTAssertEqual(policy.availability(of: action), .enabled)
+                }
+                XCTAssertEqual(
+                    policy.availability(of: .pin),
+                    isAdmin && !isThreadView ? .enabled : .hidden)
+                var pinned = context
+                pinned.isPinned = true
+                XCTAssertEqual(
+                    MessageActionPolicy(messageType: .text, context: pinned)
+                        .availability(of: .unpin),
+                    isAdmin && !isThreadView ? .enabled : .hidden)
+            }
+        }
+    }
+
+    func testGroupWriteRestrictionOverridesOfflineAndUnresolvedSavedPermission() {
+        for canUseNetworkActions in [false, true] {
+            for isSendPermissionResolved in [false, true] {
+                var context = MessageInteractionContext(
+                    canWrite: true, groupChatWriteRestricted: true, isAdmin: true,
+                    isThreadView: true, speakingMode: .unrestricted,
+                    hasExistingThread: true, canUseNetworkActions: canUseNetworkActions,
+                    isSendPermissionResolved: isSendPermissionResolved, savedSendDecision: true)
+                XCTAssertEqual(context.resolvedSendDecision, false)
+                XCTAssertFalse(context.canStageDraft)
+                XCTAssertFalse(context.canSend)
+                XCTAssertFalse(context.canSendOnline(isThreadReply: true))
+                XCTAssertFalse(context.canCreateThread)
+
+                context.groupChatWriteRestricted = false
+                XCTAssertTrue(context.canStageDraft)
+                XCTAssertTrue(context.canSend)
+            }
+        }
+    }
+
+    func testGroupWriteRestrictionDoesNotAffectWritableDMContentOrPins() {
+        let context = MessageInteractionContext(
+            isDM: true, canWrite: true, groupChatWriteRestricted: true,
+            canSave: true, speakingMode: .readOnly)
+        let policy = MessageActionPolicy(
+            messageType: .text, text: "Own DM", isOwn: true, context: context)
+        XCTAssertTrue(context.canWriteContent)
+        XCTAssertTrue(context.canStageDraft)
+        XCTAssertTrue(context.canSend)
+        XCTAssertTrue(context.canSendOnline(isThreadReply: true))
+        XCTAssertTrue(context.canCreateThread)
+        XCTAssertTrue(policy.canReact)
+        for action in [MessageMenuAction.reply, .thread, .edit, .delete, .pin, .forward, .save] {
+            XCTAssertEqual(policy.availability(of: action), .enabled)
+        }
+    }
+
     func testUnknownSpeakingModeDoesNotGrantGroupWritesButAdminAndDMRemainExempt() {
         XCTAssertFalse(MessageInteractionContext(canWrite: true).canSend)
         XCTAssertTrue(MessageInteractionContext(isDM: true, canWrite: true).canSend)

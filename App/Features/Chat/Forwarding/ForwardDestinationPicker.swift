@@ -110,6 +110,7 @@ final class ForwardDestinationPickerModel: ObservableObject {
         case unavailable, stale, tooMany, topicUnavailable, threadNotDownloaded
         case loadFailed, sendFailed
         case restricted(SpeakingMode)
+        case groupChatWriteRestricted
 
         var errorDescription: String? {
             switch self {
@@ -134,6 +135,8 @@ final class ForwardDestinationPickerModel: ObservableObject {
                 AppLanguage.localized("Could not forward these messages. Try again.")
             case .restricted(let mode):
                 mode.restrictionExplanation
+            case .groupChatWriteRestricted:
+                AppLanguage.localized("Your user group cannot post in group chats.")
             }
         }
     }
@@ -223,6 +226,9 @@ final class ForwardDestinationPickerModel: ObservableObject {
             return store.canFetchHistory
                 ? nil : AppLanguage.localized("Saved Messages requires a connection.")
         case .conversation(let destination):
+            if groupChatWriteRestricted(for: destination) {
+                return AppLanguage.localized("Your user group cannot post in group chats.")
+            }
             guard store.historyCache?.accessRevoked(destination.id.chatID) != true else {
                 return AppLanguage.localized("This conversation is no longer available.")
             }
@@ -233,6 +239,15 @@ final class ForwardDestinationPickerModel: ObservableObject {
                 return AppLanguage.localized("Sending is not allowed in this conversation.")
             case nil: return AppLanguage.localized("Connect to check whether you can send.")
             }
+        }
+    }
+
+    func groupChatWriteRestricted(for destination: ConversationListItem) -> Bool {
+        guard store.currentUserProfile?.groupChatWriteRestricted == true else { return false }
+        if store.groupChatWriteRestricted(chatID: destination.id.chatID) { return true }
+        switch destination {
+        case .chat(let chat): return chat.kind == .group
+        case .thread(let thread): return thread.chatKind == .group
         }
     }
 
@@ -378,6 +393,12 @@ final class ForwardDestinationPickerModel: ObservableObject {
     func choose(_ target: ForwardDestination) {
         guard !selectionBlocked else { return }
         if case .saved = target, !store.canFetchHistory { return }
+        if case .conversation(let destination) = target,
+            groupChatWriteRestricted(for: destination)
+        {
+            failure = .groupChatWriteRestricted
+            return
+        }
         isResolving = true
         let token = generation
         selectionTask = Task { [weak self] in
@@ -394,6 +415,11 @@ final class ForwardDestinationPickerModel: ObservableObject {
                     _ = await self.store.savedSendDecision(for: destination.id)
                 }
                 guard self.current(token), self.failure != .stale else { return }
+                if case .conversation(let destination) = target,
+                    self.groupChatWriteRestricted(for: destination)
+                {
+                    throw Failure.groupChatWriteRestricted
+                }
                 try self.validate(selection)
                 self.resolvedSources = selection.sorted { $0.id < $1.id }
                 self.failure = nil
@@ -517,6 +543,9 @@ final class ForwardDestinationPickerModel: ObservableObject {
                     try await store.savedMessages.save(message)
                 }
             case .conversation(let destination):
+                guard !groupChatWriteRestricted(for: destination) else {
+                    throw Failure.groupChatWriteRestricted
+                }
                 try await store.prepareForwardDestination(destination.id)
                 guard current(token) else { throw CancellationError() }
                 if loadSources != nil, !store.canFetchHistory {
@@ -527,6 +556,9 @@ final class ForwardDestinationPickerModel: ObservableObject {
                 }
                 guard current(token) else { throw CancellationError() }
                 try validate(selection)
+                guard !groupChatWriteRestricted(for: destination) else {
+                    throw Failure.groupChatWriteRestricted
+                }
                 try await store.outgoingQueue.enqueueForward(
                     chatID: destination.id.chatID, threadID: destination.id.threadID,
                     sources: selection, allowPlaceholders: allowPlaceholders)
@@ -536,7 +568,11 @@ final class ForwardDestinationPickerModel: ObservableObject {
             onPrepared()
         } catch {
             guard current(token), failure != .stale else { return }
-            if let mode = (error as? APIError)?.speakingRestriction
+            if (error as? APIError)?.isGroupChatWriteRestricted == true {
+                failure = .groupChatWriteRestricted
+            } else if case .groupChatWriteRestricted? = error as? SpeakingWriteError {
+                failure = .groupChatWriteRestricted
+            } else if let mode = (error as? APIError)?.speakingRestriction
                 ?? (error as? SpeakingWriteError)?.speakingRestriction
             {
                 failure = .restricted(mode)

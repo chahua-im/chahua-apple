@@ -6,6 +6,50 @@ import XCTest
 
 @MainActor
 final class MessageReactionControllerTests: XCTestCase {
+    func testRestrictionDuringOwnershipReadPreventsReactionMutation() async throws {
+        let original = try message()
+        let (controller, api, _) = makeController()
+        var restricted = false
+        controller.isWriteRestricted = { _ in restricted }
+        let operation = Task {
+            await controller.toggle(message: original, emoji: "👍", currentUserID: 1)
+        }
+        await api.waitForRequests(1)
+        restricted = true
+        await api.finishRead(0, with: .success(original))
+        await operation.value
+        let requests = await api.requests()
+        XCTAssertEqual(requests, [.get])
+        XCTAssertEqual(
+            controller.error, AppLanguage.localized("Your user group cannot post in group chats."))
+    }
+
+    func testGroupWriteRefusalUpdatesAccountRestrictionWithoutChangingReactions() async throws {
+        let original = try message()
+        let (controller, api, _) = makeController()
+        var restricted = false
+        controller.onWriteRejected = {
+            restricted = ($0 as? APIError)?.isGroupChatWriteRestricted == true
+        }
+        let operation = Task {
+            await controller.toggle(message: original, emoji: "👍", currentUserID: 1)
+        }
+        await api.waitForRequests(1)
+        await api.finishRead(0, with: .success(original))
+        await api.waitForRequests(2)
+        await api.finishMutation(
+            1,
+            with: .failure(
+                APIError.http(
+                    status: 403, body: Data(#"{"reason":"groupChatWriteRestricted"}"#.utf8))))
+        await operation.value
+        let requests = await api.requests()
+        XCTAssertEqual(requests, [.get, .put("👍")])
+        XCTAssertTrue(restricted)
+        XCTAssertEqual(
+            controller.error, AppLanguage.localized("Your user group cannot post in group chats."))
+    }
+
     func testUnknownBroadcastOwnershipUsesAuthoritativeDeleteAndDeduplicatesIntent() async throws {
         let broadcast = try message(reactions: [["emoji": "👍", "count": 6]])
         let mine = try message(reactions: [["emoji": "👍", "count": 6, "reactedByMe": true]])

@@ -43,7 +43,7 @@
                     else { return }
                     target = Target(key: row.entry.stableKey, source: source)
                 } : nil
-            if isSelectingMessages || !context.canWrite { result.toggleReaction = nil }
+            if isSelectingMessages || !context.canWriteContent { result.toggleReaction = nil }
             if isSelectingMessages { result.openReactionDetails = nil }
             if isSelectingMessages || target != nil || !context.canStageDraft {
                 result.replyToMessage = nil

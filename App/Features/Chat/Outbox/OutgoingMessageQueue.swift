@@ -102,6 +102,12 @@ final class OutgoingMessageQueue: ObservableObject {
 
     var authorizeWrite: (@MainActor (String, String?) async throws -> Void)?
     var authorizeEnqueue: (@MainActor (ConversationKey) async throws -> Void)?
+    var isWriteRestricted: (@MainActor (ConversationKey) -> Bool)?
+    var onWriteRejected: (@MainActor (Error) -> Void)?
+
+    func writePermissionsDidChange() {
+        wakeWorkers()
+    }
     var backgroundWorkDidChange: (() -> Void)?
     var onDiskFull: (() -> Void)?
 
@@ -554,6 +560,9 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     private func requireEnqueuePermission(_ key: ConversationKey) async throws {
+        if isWriteRestricted?(key) == true {
+            throw SpeakingWriteError.groupChatWriteRestricted
+        }
         let current = generation
         _ = try requireStore()
         if let authorizeEnqueue { try await authorizeEnqueue(key) }
@@ -676,12 +685,18 @@ final class OutgoingMessageQueue: ObservableObject {
 
     func retry(chatID: String, threadID: String? = nil, clientGeneratedID id: String) async throws {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
+        if isWriteRestricted?(key) == true {
+            throw SpeakingWriteError.groupChatWriteRestricted
+        }
         let current = generation
         try await ordered {
             try await self.checkpoint(.retry, generation: current)
             let store = try self.requireStore()
             guard self.editors[id] == nil, let item = self.item(key, id), let failure = item.failure
             else { return }
+            if self.isWriteRestricted?(key) == true {
+                throw SpeakingWriteError.groupChatWriteRestricted
+            }
             switch failure.stage {
             case .preparation:
                 guard self.serverAllowsRetry(item) else { return }
@@ -1206,6 +1221,7 @@ final class OutgoingMessageQueue: ObservableObject {
             guard current == generation, workers[key]?.id == workerID, item(key, id) != nil,
                 completions[id] == nil
             else { return }
+            onWriteRejected?(error)
             let failure = Self.failure(error, stage: .create)
             if !handedOff.contains(workerID), failure.retry == .automatic {
                 let retry = PreflightRetry(
@@ -1400,6 +1416,12 @@ final class OutgoingMessageQueue: ObservableObject {
         if error is CancellationError {
             return .init(stage: stage, reason: .unknownOutcome, retry: .automatic)
         }
+        if (error as? APIError)?.isGroupChatWriteRestricted == true {
+            return .init(stage: stage, reason: .groupChatWriteRestricted, retry: .manual)
+        }
+        if case SpeakingWriteError.groupChatWriteRestricted = error {
+            return .init(stage: stage, reason: .groupChatWriteRestricted, retry: .manual)
+        }
         if let mode = (error as? APIError)?.speakingRestriction
             ?? (error as? SpeakingWriteError)?.speakingRestriction
         {
@@ -1517,6 +1539,7 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     func retryEditAttachment(id: String, session: PendingEditSession) {
+        guard isWriteRestricted?(session.conversationKey) != true else { return }
         guard (try? validate(session)) != nil, !savingEditors.contains(session.id) else { return }
         session.replaceAttachments(
             session.attachments.map { slot in
@@ -1612,6 +1635,9 @@ final class OutgoingMessageQueue: ObservableObject {
 
     func retryAttachment(id: String, chatID: String, threadID: String? = nil) async throws {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
+        if isWriteRestricted?(key) == true {
+            throw SpeakingWriteError.groupChatWriteRestricted
+        }
         try await changeDraft(key) { slots in
             slots.map {
                 guard $0.id == id, $0.failure != nil,
@@ -1714,6 +1740,7 @@ final class OutgoingMessageQueue: ObservableObject {
         }
         guard prepares < 1 || uploads < 2 else { return }
         for (key, snapshot) in snapshots {
+            guard isWriteRestricted?(key) != true else { continue }
             if foregroundActive {
                 for item in snapshot.outgoing
                 where item.state == .pending && editors[item.clientGeneratedID] == nil {
@@ -1789,6 +1816,7 @@ final class OutgoingMessageQueue: ObservableObject {
     ) async {
         do {
             try checkGeneration(current)
+            guard isWriteRestricted?(work.key) != true else { return }
             guard canDispatch, allowsExecution, attachmentOwner(work.key, id).found,
                 work.slot.retryNotBefore.map({ $0 <= Date() }) ?? true
             else { return }
@@ -1832,6 +1860,7 @@ final class OutgoingMessageQueue: ObservableObject {
         let config = try await apiClient.attachmentConfig()
         try checkGeneration(current)
         guard attachmentOwner(work.key, id).found else { throw CancellationError() }
+        if isWriteRestricted?(work.key) == true { throw CancellationError() }
         guard slot.byteCount <= config.maxFileSizeBytes else {
             throw AttachmentSizeError(limit: config.maxFileSizeBytes)
         }
@@ -1841,6 +1870,7 @@ final class OutgoingMessageQueue: ObservableObject {
             size: slot.byteCount, width: slot.width, height: slot.height, order: slot.position)
         try checkGeneration(current)
         guard attachmentOwner(work.key, id).found else { throw CancellationError() }
+        if isWriteRestricted?(work.key) == true { throw CancellationError() }
         try await uploadFile(directory, URL(fileURLWithPath: slot.uploadPath), allocation) {
             [weak self] progress in
             Task { @MainActor [weak self] in

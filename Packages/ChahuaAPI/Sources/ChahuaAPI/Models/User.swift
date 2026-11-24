@@ -116,6 +116,13 @@ public struct MeResponse: Codable, Hashable, Sendable {
     public let muteDirectChatsByDefault: Bool?
     public private(set) var showMembershipMessages: Bool?
     public private(set) var showUnreadMessageCount: Bool?
+    public private(set) var groupChatWriteRestricted: Bool?
+
+    public func withGroupChatWriteRestriction(_ restricted: Bool) -> Self {
+        var copy = self
+        copy.groupChatWriteRestricted = restricted
+        return copy
+    }
 
     public func withChatSettings(_ settings: ChatSettings) -> Self {
         var copy = self

@@ -175,12 +175,27 @@ final class ChatStore: ObservableObject {
     private var stateFallbackGeneration = 0
     private var fallbackKeys = Set<ConversationKey>()
     private var readFenceReconciliations = Set<ConversationKey>()
+    private var groupChatWriteRevision = 0
+
     @Published var currentUserProfile: MeResponse? {
         didSet {
             stickers.setAccount(currentUserProfile?.uid)
             savedMessages.setAccount(currentUserProfile?.uid)
             stickers.setPackOrder(currentUserProfile?.stickerPackOrder ?? [])
             guard currentUserProfile != oldValue else { return }
+            if currentUserProfile?.uid != oldValue?.uid
+                || currentUserProfile?.groupChatWriteRestricted
+                    != oldValue?.groupChatWriteRestricted
+            {
+                groupChatWriteRevision &+= 1
+                let chatIDs = Set(groupInfoByChatID.keys)
+                    .union(savedSendDecisions.keys.map(\.chatID))
+                for chatID in chatIDs
+                where knownChatKind(chatID: chatID) == .group {
+                    invalidateSendPermissions(chatID: chatID)
+                }
+                outgoingQueue.writePermissionsDidChange()
+            }
             if let settings = membershipChatSettings, currentUserProfile != nil,
                 currentUserProfile?.showMembershipMessages != settings.showMembershipMessages
                     || currentUserProfile?.showUnreadMessageCount != settings.showUnreadMessageCount
@@ -399,6 +414,7 @@ final class ChatStore: ObservableObject {
         } catch {
             guard generation == requestGeneration else { throw CancellationError() }
             if case APIError.invalidToken = error { await onInvalidToken() }
+            acceptGroupChatWriteRejection(error)
             throw error
         }
     }
@@ -481,6 +497,18 @@ final class ChatStore: ObservableObject {
         }
         storageObservation = outgoingQueue.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
+        }
+        outgoingQueue.isWriteRestricted = { [weak self] key in
+            self?.groupChatWriteRestricted(chatID: key.chatID) == true
+        }
+        outgoingQueue.onWriteRejected = { [weak self] error in
+            self?.acceptGroupChatWriteRejection(error)
+        }
+        reactions.isWriteRestricted = { [weak self] chatID in
+            self?.groupChatWriteRestricted(chatID: chatID) == true
+        }
+        reactions.onWriteRejected = { [weak self] error in
+            self?.acceptGroupChatWriteRejection(error)
         }
         outgoingQueue.authorizeWrite = { [weak self] chatID, threadID in
             guard let self else { throw SpeakingWriteError.unavailable }
@@ -2836,11 +2864,15 @@ final class ChatStore: ObservableObject {
             return true
         } catch {
             guard generation == requestGeneration else { return false }
+            acceptGroupChatWriteRejection(error)
             if appliedOptimistically {
                 conversationMessages.apply(.messageUpdated(message), persistent: false)
                 pins.applyRealtimeEvent(.messageUpdated(message))
             }
-            if let mode = (error as? APIError)?.speakingRestriction {
+            if (error as? APIError)?.isGroupChatWriteRestricted == true {
+                messageUpdateError =
+                    SpeakingWriteError.groupChatWriteRestricted.localizedDescription
+            } else if let mode = (error as? APIError)?.speakingRestriction {
                 messageUpdateError = mode.restrictionExplanation
             } else if let error = error as? SpeakingWriteError {
                 messageUpdateError = error.localizedDescription
@@ -2857,6 +2889,7 @@ final class ChatStore: ObservableObject {
         let requestGeneration = generation
         defer { if generation == requestGeneration { deletingMessageIDs.remove(message.id) } }
         do {
+            try requireGroupChatWritePermission(chatID: message.chatId)
             try await apiClient.deleteMessage(chatID: message.chatId, messageID: message.id)
             guard generation == requestGeneration else { return false }
             // Commit redaction only after server acceptance: deleted IDs are
@@ -2870,6 +2903,7 @@ final class ChatStore: ObservableObject {
             return true
         } catch {
             guard generation == requestGeneration else { return false }
+            acceptGroupChatWriteRejection(error)
             if case APIError.invalidToken = error { await onInvalidToken() }
             return false
         }
@@ -2886,6 +2920,7 @@ final class ChatStore: ObservableObject {
         else { throw APIError.unavailable }
         let requestGeneration = generation
         let ids = Set(messages.map(\.id))
+        try requireGroupChatWritePermission(chatID: first.chatId)
         deletingMessageIDs.formUnion(ids)
         defer {
             if generation == requestGeneration { deletingMessageIDs.subtract(ids) }
@@ -2917,7 +2952,10 @@ final class ChatStore: ObservableObject {
         }
         if status == .connected { refreshListReadReceipts(clear: true) }
         if status == .connected {
-            Task { try? await loadNotificationDefaults() }
+            Task {
+                await refreshGroupChatWriteRestriction()
+                try? await loadNotificationDefaults()
+            }
         }
         for model in visibleTimelines() { model.setRealtimeStatus(status) }
     }
@@ -3790,6 +3828,50 @@ final class ChatStore: ObservableObject {
         return chat
     }
 
+    private func knownChatKind(chatID: String) -> ChatKind? {
+        groupInfoByChatID[chatID]?.kind ?? chat(id: chatID)?.kind
+            ?? state.threads.first { $0.chatId == chatID }?.chatKind
+            ?? state.archivedThreads.first { $0.chatId == chatID }?.chatKind
+    }
+
+    func groupChatWriteRestricted(chatID: String) -> Bool {
+        currentUserProfile?.groupChatWriteRestricted == true
+            && knownChatKind(chatID: chatID) == .group
+    }
+
+    private func requireGroupChatWritePermission(chatID: String) throws {
+        if groupChatWriteRestricted(chatID: chatID) {
+            throw SpeakingWriteError.groupChatWriteRestricted
+        }
+    }
+
+    func acceptGroupChatWriteRejection(_ error: Error) {
+        guard (error as? APIError)?.isGroupChatWriteRestricted == true,
+            let profile = currentUserProfile
+        else { return }
+        // Every refusal fences an older profile read, even when already restricted.
+        groupChatWriteRevision &+= 1
+        currentUserProfile = profile.withGroupChatWriteRestriction(true)
+    }
+
+    func refreshGroupChatWriteRestriction() async {
+        guard let profile = currentUserProfile else { return }
+        let current = generation
+        groupChatWriteRevision &+= 1
+        let revision = groupChatWriteRevision
+        do {
+            let refreshed = try await apiClient.me()
+            guard current == generation, revision == groupChatWriteRevision,
+                refreshed.uid == profile.uid, currentUserProfile?.uid == profile.uid,
+                let restricted = refreshed.groupChatWriteRestricted
+            else { return }
+            currentUserProfile = currentUserProfile?.withGroupChatWriteRestriction(restricted)
+        } catch {
+            guard current == generation else { return }
+            if case APIError.invalidToken = error { await onInvalidToken() }
+        }
+    }
+
     func speakingMode(chatID: String) -> SpeakingMode? {
         groupInfoByChatID[chatID]?.effectiveSpeakingMode
     }
@@ -3814,6 +3896,7 @@ final class ChatStore: ObservableObject {
             throw SpeakingWriteError.unavailable
         }
         guard info.kind == .group else { return }
+        try requireGroupChatWritePermission(chatID: chatID)
         if info.myRole == .admin { return }
         guard info.myRole != nil, let mode = info.effectiveSpeakingMode else {
             throw SpeakingWriteError.unavailable
@@ -3854,6 +3937,7 @@ final class ChatStore: ObservableObject {
         } else if !mode.allowsMainMessages {
             throw SpeakingWriteError.restricted(mode)
         }
+        try requireGroupChatWritePermission(chatID: chatID)
         guard generation == requestGeneration else { throw CancellationError() }
     }
 
@@ -3897,7 +3981,8 @@ final class ChatStore: ObservableObject {
     }
 
     func currentSavedSendDecision(for key: ConversationKey) -> Bool? {
-        historyCache?.accessRevoked(key.chatID) == true ? false : savedSendDecisions[key]
+        if groupChatWriteRestricted(chatID: key.chatID) { return false }
+        return historyCache?.accessRevoked(key.chatID) == true ? false : savedSendDecisions[key]
     }
 
     func savedSendDecision(for key: ConversationKey) async -> Bool? {
@@ -3921,6 +4006,7 @@ final class ChatStore: ObservableObject {
 
     func rememberSendDecision(_ allowed: Bool, for key: ConversationKey) {
         guard canFetchHistory, historyCache?.accessRevoked(key.chatID) != true else { return }
+        guard !groupChatWriteRestricted(chatID: key.chatID) else { return }
         if !allowed { dispatchPermissionChecks.remove(key) }
         let peer = groupInfoByChatID[key.chatID]?.peer?.uid ?? chat(id: key.chatID)?.peer?.uid
         guard savedSendDecisions[key] != allowed || sendPermissionPeers[key.chatID] != peer else {
@@ -3956,6 +4042,7 @@ final class ChatStore: ObservableObject {
     }
 
     func prepareForwardDestination(_ key: ConversationKey) async throws {
+        try requireGroupChatWritePermission(chatID: key.chatID)
         guard historyCache != nil else {
             try await requireSpeakingPermission(chatID: key.chatID, threadID: key.threadID)
             return
@@ -3995,6 +4082,7 @@ final class ChatStore: ObservableObject {
 
     private func authorizeDispatch(_ key: ConversationKey) async throws {
         guard canFetchHistory else { throw CancellationError() }
+        try requireGroupChatWritePermission(chatID: key.chatID)
         guard historyCache?.accessRevoked(key.chatID) != true else {
             throw SpeakingWriteError.unavailable
         }

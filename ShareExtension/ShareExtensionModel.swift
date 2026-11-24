@@ -234,8 +234,18 @@ final class ShareExtensionModel: ObservableObject {
     }
 
     func retryPermission() {
-        guard let selectedDestination else { return }
-        selectDestination(selectedDestination)
+        guard let api, let destination = lockedDestination ?? selectedDestination,
+            state == .ready
+        else { return }
+        canWriteToDestination = false
+        destinationPermissionMessage = nil
+        isCheckingPermission = true
+        permissionTask?.cancel()
+        let id = UUID()
+        permissionID = id
+        permissionTask = Task { [weak self] in
+            await self?.checkPermission(for: destination, using: api, permissionID: id)
+        }
     }
 
     func retryPreparation() {
@@ -252,33 +262,12 @@ final class ShareExtensionModel: ObservableObject {
         for destination: ShareDestination, using api: any ChahuaAPIClient, permissionID: UUID
     ) async {
         do {
-            let info = try await api.groupInfo(chatID: destination.chatID)
-            guard info.id == destination.chatID else { throw APIError.unexpectedResponse }
-            var canWrite = info.myRole != nil
-            if info.kind == .dm {
-                canWrite = false
-                if let peer = info.peer {
-                    let relationship = try await api.friendRelationship(peerUID: peer.uid)
-                    guard relationship.peerUid == peer.uid else {
-                        throw APIError.unexpectedResponse
-                    }
-                    canWrite = info.myRole != nil && relationship.canDm
-                }
-            } else if info.myRole != .admin {
-                // The subscribed-thread page establishes an existing thread. Main messages
-                // and replies still have different speaking rules.
-                canWrite =
-                    canWrite
-                    && (destination.threadID.isEmpty
-                        ? info.effectiveSpeakingMode?.allowsMainMessages == true
-                        : info.effectiveSpeakingMode?.allowsThreadReplies == true)
-            }
+            try await validatePermission(for: destination, using: api)
             try Task.checkCancellation()
             guard self.permissionID == permissionID else { return }
-            canWriteToDestination = canWrite
+            canWriteToDestination = true
             isCheckingPermission = false
-            destinationPermissionMessage =
-                canWrite ? nil : String(localized: "You can’t send to this destination.")
+            destinationPermissionMessage = nil
         } catch is CancellationError {
             return
         } catch {
@@ -289,6 +278,36 @@ final class ShareExtensionModel: ObservableObject {
             } else {
                 destinationPermissionMessage = Self.message(for: error)
             }
+        }
+    }
+
+    private func validatePermission(
+        for destination: ShareDestination, using api: any ChahuaAPIClient
+    ) async throws {
+        let info = try await api.groupInfo(chatID: destination.chatID)
+        guard info.id == destination.chatID else { throw APIError.unexpectedResponse }
+        if info.kind == .dm {
+            guard info.myRole != nil, let peer = info.peer else {
+                throw ShareExtensionError.destinationNotWritable
+            }
+            let relationship = try await api.friendRelationship(peerUID: peer.uid)
+            guard relationship.peerUid == peer.uid else { throw APIError.unexpectedResponse }
+            guard relationship.canDm else { throw ShareExtensionError.destinationNotWritable }
+            return
+        }
+        // This profile rule applies to administrators too. Missing flags on older
+        // servers remain unrestricted; a failed profile read does not authorize a send.
+        let profile = try await api.me()
+        guard profile.groupChatWriteRestricted != true else {
+            throw ShareExtensionError.groupChatWriteRestricted
+        }
+        guard info.myRole != nil else { throw ShareExtensionError.destinationNotWritable }
+        if info.myRole != .admin {
+            let allowed =
+                destination.threadID.isEmpty
+                ? info.effectiveSpeakingMode?.allowsMainMessages == true
+                : info.effectiveSpeakingMode?.allowsThreadReplies == true
+            guard allowed else { throw ShareExtensionError.destinationNotWritable }
         }
     }
 
@@ -315,6 +334,19 @@ final class ShareExtensionModel: ObservableObject {
     private func performSend(using api: any ChahuaAPIClient, destination: ShareDestination) async {
         let currentGeneration = generation
         do {
+            // Recheck on every attempt, including frozen-request retries, before any upload.
+            do {
+                try await validatePermission(for: destination, using: api)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard generation == currentGeneration else { return }
+                canWriteToDestination = false
+                destinationPermissionMessage = Self.message(for: error)
+                throw error
+            }
+            try Task.checkCancellation()
+            guard generation == currentGeneration else { return }
             let request: ShareMessageRequest
             if let pendingMessageRequest {
                 request = pendingMessageRequest
@@ -352,6 +384,10 @@ final class ShareExtensionModel: ObservableObject {
             guard generation == currentGeneration else { return }
             state = .ready
             if pendingMessageRequest == nil { lockedDestination = nil }
+            if let apiError = error as? APIError, apiError.isGroupChatWriteRestricted {
+                canWriteToDestination = false
+                destinationPermissionMessage = Self.message(for: error)
+            }
             if Self.isAuthenticationError(error) {
                 present(error: error, whileLoading: false)
             } else {
@@ -476,6 +512,9 @@ final class ShareExtensionModel: ObservableObject {
     private static func message(for error: Error) -> String {
         if let error = error as? ShareExtensionError { return error.localizedDescription }
         if let error = error as? APIError {
+            if error.isGroupChatWriteRestricted {
+                return String(localized: "Your user group cannot post in group chats.")
+            }
             switch error {
             case .transport:
                 return String(
@@ -1062,9 +1101,15 @@ nonisolated private enum ShareExtensionError: LocalizedError {
     case unsafeUpload
     case invalidUpload
     case uploadStatus(Int)
+    case destinationNotWritable
+    case groupChatWriteRestricted
 
     var errorDescription: String? {
         switch self {
+        case .destinationNotWritable:
+            String(localized: "You can’t send to this destination.")
+        case .groupChatWriteRestricted:
+            String(localized: "Your user group cannot post in group chats.")
         case .unavailable:
             String(localized: "This shared item couldn’t be read. Try sharing it again.")
         case .invalidConfiguration:

@@ -43,6 +43,8 @@ extension OutboxFailure.Reason {
             )
         case .speakingRestricted(let mode):
             mode.restrictionExplanation
+        case .groupChatWriteRestricted:
+            AppLanguage.localized("Your user group cannot post in group chats.")
         }
     }
 }

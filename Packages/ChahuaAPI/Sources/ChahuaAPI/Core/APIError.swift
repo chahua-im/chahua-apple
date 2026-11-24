@@ -70,6 +70,18 @@ public enum APIError: Error, Sendable {
         let effectiveSpeakingMode: SpeakingMode
     }
 
+    /// Only the exact structured group-write denial is classified; unrelated 403s stay generic.
+    public var isGroupChatWriteRestricted: Bool {
+        guard case .http(status: 403, body: let body) = self,
+            let restriction = try? JSONDecoder().decode(GroupChatWriteRestriction.self, from: body)
+        else { return false }
+        return restriction.reason == "groupChatWriteRestricted"
+    }
+
+    private struct GroupChatWriteRestriction: Decodable {
+        let reason: String
+    }
+
     /// A create conflict reports the server copy, not acceptance of the submitted payload.
     /// The caller must validate the account and conversation before using this receipt.
     public var conflictingExistingMessage: MessageResponse? {

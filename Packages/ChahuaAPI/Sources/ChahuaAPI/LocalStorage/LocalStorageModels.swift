@@ -114,6 +114,7 @@ public struct OutboxFailure: Codable, Hashable, Sendable {
         case attachment
         case tooLarge(Int64)
         case speakingRestricted(SpeakingMode)
+        case groupChatWriteRestricted
     }
 
     public let stage: Stage
