@@ -48,9 +48,10 @@ struct AuthenticatedShell: View {
     @StateObject private var messageEditExitCoordinator = MessageEditExitCoordinator()
     @State private var declinedNotificationIDs = Set<UUID>()
     @State private var retainedSplitPresentation: Bool?
-    #if os(macOS)
-        @State private var isSearchPresented = false
-    #endif
+    @State private var isSearchPresented = false
+    @State private var sidebarSearch: ConversationSearchModel?
+    @State private var sidebarSearchFocusRequest = 0
+    @State private var showsMessageSearch = false
 
     private enum FeatureDestination: Hashable, Identifiable {
         case addFriend, createGroup
@@ -180,7 +181,7 @@ struct AuthenticatedShell: View {
         var key: ConversationKey { .init(chatID: chat.id, threadID: rootID) }
     }
 
-    /// Search state retained for the selected chat while its sheet is dismissed.
+    /// Search state retained for the selected chat while its search surface is closed.
     private struct MessageSearchSession {
         let chat: ChatListItem
         let model: MessageSearchModel
@@ -191,11 +192,7 @@ struct AuthenticatedShell: View {
     @State private var threadSubscription: ThreadSubscriptionModel?
 
     private var isShellVoiceCovered: Bool {
-        #if os(macOS)
-            showsSettings || feature != nil || inspectorProfileUID != nil || isSearchPresented
-        #else
-            showsSettings || feature != nil || inspectorProfileUID != nil
-        #endif
+        showsSettings || feature != nil || inspectorProfileUID != nil
     }
 
     private var voiceHeaderRoute: VoicePlaybackHeaderRoute {
@@ -322,13 +319,6 @@ struct AuthenticatedShell: View {
             #endif
         }
         #if os(macOS)
-            .sheet(isPresented: $isSearchPresented) {
-                MacSidebarSearchView(currentUserID: me.uid, store: chatStore) { chat in
-                    isSearchPresented = false
-                    openChat(chat)
-                }
-                .onExitCommand { isSearchPresented = false }
-            }
             .background {
                 Button("Search conversations") { presentSidebarSearch() }
                 .keyboardShortcut("k", modifiers: .command)
@@ -395,9 +385,7 @@ struct AuthenticatedShell: View {
             VoicePlaybackSession.shared.stop()
             VoicePlaybackController.stopAll()
             archivedScope = .messages
-            #if os(macOS)
-                isSearchPresented = false
-            #endif
+            closeSidebarSearch()
         }
         .onChange(of: chatStore.sessionRevision) { _, _ in
             invalidateFormGuards()
@@ -406,9 +394,7 @@ struct AuthenticatedShell: View {
             listPath.removeAll()
             showsInspector = false
             declinedNotificationIDs.removeAll()
-            #if os(macOS)
-                isSearchPresented = false
-            #endif
+            closeSidebarSearch()
         }
         .onAppear {
             bindNavigationActions()
@@ -536,8 +522,9 @@ struct AuthenticatedShell: View {
             #endif
         } detail: { isSplit in
             ChatInspectorLayout(
-                isPresented: inspectorPresentation,
-                freezesPresentation: groupExitGuard.isProtected
+                isPresented: sidePanelPresentation,
+                freezesPresentation: groupExitGuard.isProtected,
+                overlaysWhenNarrow: showsMessageSearch
             ) {
                 NavigationStack(path: detailPath) {
                     splitConversationSurface(thread: nil, isSplit: isSplit)
@@ -551,8 +538,13 @@ struct AuthenticatedShell: View {
                         }
                 }
             } inspector: {
-                inspectorContent
+                sidePanelContent
             }
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    if isSearchPresented { closeSidebarSearch() }
+                }
+            )
             .onChange(of: selectedConversationID) { _, _ in showsInspector = false }
             .onChange(of: threadPath) { _, path in
                 if !path.isEmpty { showsInspector = false }
@@ -607,6 +599,7 @@ struct AuthenticatedShell: View {
                         }
                         : infoAction,
                     onSearch: searchAction,
+                    isSearchPresented: showsMessageSearch,
                     notificationChat: headerNotificationChat,
                     notificationDefaults: chatStore.state.notificationDefaults,
                     onUpdateNotifications: { chat, request in
@@ -794,7 +787,7 @@ struct AuthenticatedShell: View {
             presentation: listPresentation,
             showsExternalHeader: externalHeader,
             isActive: active,
-            onSearch: sidebarSearchAction,
+            onSearch: presentSidebarSearch,
             selectedConversationID: selectedConversationID,
             onSelectConversation: { selectConversation($0.id) }
         )
@@ -810,9 +803,9 @@ struct AuthenticatedShell: View {
                         account: { accountButton },
                         actions: { creationButton })
                     if showsVoiceHeader {
-                        list.voicePlaybackHeader()
+                        searchableList(list.voicePlaybackHeader())
                     } else {
-                        list
+                        searchableList(list)
                     }
                 }
             }
@@ -827,12 +820,41 @@ struct AuthenticatedShell: View {
         #endif
     }
 
-    private var sidebarSearchAction: (() -> Void)? {
-        #if os(macOS)
-            { presentSidebarSearch() }
-        #else
-            nil
-        #endif
+    private func searchableList(_ list: some View) -> some View {
+        ZStack(alignment: .top) {
+            list
+                .opacity(isSearchPresented ? 0 : 1)
+                .allowsHitTesting(!isSearchPresented)
+                .accessibilityHidden(isSearchPresented)
+            if isSearchPresented { sidebarSearchContent }
+        }
+    }
+
+    @ViewBuilder
+    private var sidebarSearchContent: some View {
+        if let sidebarSearch {
+            ConversationSearchView(
+                model: sidebarSearch,
+                onClose: closeSidebarSearch, onOpenChat: openChat,
+                onOpenProfile: openProfile, onOpenInvite: { setFeature(.joinGroup($0)) })
+        }
+    }
+
+    private func presentSidebarSearch() {
+        guard !isSigningOut, feature == nil, !showsSettings else { return }
+        if sidebarSearch == nil {
+            sidebarSearch = ConversationSearchModel(currentUserID: me.uid, store: chatStore)
+        }
+        sidebarSearchFocusRequest &+= 1
+        if isBrowsingFriendRequests { listPath = isBrowsingArchived ? [.archive] : [] }
+        isSearchPresented = true
+    }
+
+    private func closeSidebarSearch() {
+        let search = sidebarSearch
+        sidebarSearch = nil
+        isSearchPresented = false
+        search?.stop()
     }
 
     #if os(macOS)
@@ -840,6 +862,7 @@ struct AuthenticatedShell: View {
             MacArchiveSidebar(
                 isArchived: isBrowsingArchived,
                 allowsInteractiveBack: !isBrowsingFriendRequests,
+                isSearching: isSearchPresented,
                 activeBadges: ConversationTabBadges(
                     summaries: chatStore.state.conversationUnreadSummaries,
                     archived: false, showThreadsInMessages: showThreadsInMessages,
@@ -852,8 +875,25 @@ struct AuthenticatedShell: View {
                         ?? false),
                 badgeColor: unreadBadgeColor,
                 selection: scopeBinding(archived: isBrowsingArchived),
-                onSearch: presentSidebarSearch,
                 onBack: closeArchived,
+                searchField: {
+                    MacSidebarSearchField(
+                        query: Binding(
+                            get: { sidebarSearch?.query ?? "" },
+                            set: { query in
+                                // Native field updates during dismissal must not reopen search.
+                                guard isSearchPresented else { return }
+                                sidebarSearch?.query = query
+                            }),
+                        isSearching: isSearchPresented, focusRequest: sidebarSearchFocusRequest,
+                        onActivate: presentSidebarSearch, onClose: closeSidebarSearch,
+                        onSubmit: {
+                            sidebarSearch?.open(
+                                onOpenChat: openChat, onOpenProfile: openProfile,
+                                onOpenInvite: { setFeature(.joinGroup($0)) })
+                        },
+                        onMoveSelection: { sidebarSearch?.moveSelection(by: $0) })
+                },
                 header: { opacity in
                     MacConversationListHeader(
                         isUpdating: isListRefreshing, controlsOpacity: opacity,
@@ -864,14 +904,12 @@ struct AuthenticatedShell: View {
                         archived: archived, externalHeader: true,
                         active: archived == isBrowsingArchived && !isBrowsingFriendRequests)
                 }
-            )
+            ) {
+                sidebarSearchContent
+            }
             .onPreferenceChange(ConversationListRefreshingKey.self) { isListRefreshing = $0 }
         }
 
-        private func presentSidebarSearch() {
-            guard !isSigningOut else { return }
-            requestNavigation { isSearchPresented = true }
-        }
     #endif
 
     private func openArchived() {
@@ -1070,6 +1108,7 @@ struct AuthenticatedShell: View {
     }
 
     private func setInspectorPresented(_ presented: Bool) {
+        if presented { showsMessageSearch = false }
         let apply = {
             withAnimation(.easeInOut(duration: 0.2)) { showsInspector = presented }
         }
@@ -1078,6 +1117,33 @@ struct AuthenticatedShell: View {
         } else {
             requestNavigation(leavesFeature: false, leavesMessageEdit: false, apply)
         }
+    }
+
+    private var sidePanelPresentation: Binding<Bool> {
+        Binding(
+            get: { showsInspector || showsMessageSearch },
+            set: { presented in
+                if showsMessageSearch {
+                    showsMessageSearch = presented
+                } else {
+                    setInspectorPresented(presented)
+                }
+            })
+    }
+
+    @ViewBuilder
+    private var sidePanelContent: some View {
+        #if os(macOS)
+            if showsMessageSearch, let session = messageSearch {
+                MessageSearchView(
+                    model: session.model, onSelect: openSearchResult,
+                    onClose: { showsMessageSearch = false }, isPanel: true)
+            } else {
+                inspectorContent
+            }
+        #else
+            inspectorContent
+        #endif
     }
 
     private func setFeature(_ destination: FeatureDestination?) {
@@ -1227,8 +1293,12 @@ struct AuthenticatedShell: View {
                     try await store.searchMessages(chatID: chatID, query: query)
                 })
         }
-        guard groupPath.last != .search(chat) else { return }
-        withAnimation { groupPath.append(.search(chat)) }
+        #if os(macOS)
+            withAnimation(.easeInOut(duration: 0.2)) { showsMessageSearch.toggle() }
+        #else
+            guard groupPath.last != .search(chat) else { return }
+            withAnimation { groupPath.append(.search(chat)) }
+        #endif
     }
 
     /// Leaves the retained search page and opens the result in its chat or thread.
@@ -1437,6 +1507,7 @@ struct AuthenticatedShell: View {
     }
 
     private func performOpenChat(_ chat: ChatListItem) {
+        closeSidebarSearch()
         showsInspector = false
         chatStore.retainChatForNavigation(chat)
         feature = nil
@@ -1459,7 +1530,7 @@ struct AuthenticatedShell: View {
 
         // A different chat (or a standalone thread's parent) belongs above its
         // own list, not above a stale friend-request/profile sidebar stack.
-        let isArchived = chatStore.state.archivedChats.contains { $0.id == chat.id }
+        let isArchived = chat.archived
         if isArchived {
             if !isBrowsingArchived { archivedScope = selectedScope }
             listPath = [.archive]
@@ -1545,9 +1616,7 @@ struct AuthenticatedShell: View {
                     showsSettings = false
                     nestedProfileUID = nil
                     inspectorProfileUID = nil
-                    #if os(macOS)
-                        isSearchPresented = false
-                    #endif
+                    closeSidebarSearch()
                     if isBrowsingFriendRequests { listPath.removeAll() }
                     performOpenMessageTarget(message, in: chat)
                 })
@@ -1731,7 +1800,10 @@ struct AuthenticatedShell: View {
 
     /// Search results survive only while their chat (or one of its threads) stays selected.
     private func retainMessageSearch(forChatID chatID: String?) {
-        if messageSearch?.chat.id != chatID { messageSearch = nil }
+        if messageSearch?.chat.id != chatID {
+            messageSearch = nil
+            showsMessageSearch = false
+        }
     }
 
     private func retryNotification() {

@@ -9,7 +9,7 @@ import ChahuaAPI
 
     @MainActor
     final class MacWindowChromeTests: XCTestCase {
-        func testSidebarSearchIncludesArchivedAndContinuesPastNonmatchingPages() async throws {
+        func testConversationSearchIncludesArchivedAndContinuesPastNonmatchingPages() async throws {
             let api = FakeChatAPI(
                 chatResults: [
                     .success(
@@ -43,7 +43,7 @@ import ChahuaAPI
                     """
                     {"uid":1,"username":"Account 1","gender":0,"stickerPackOrder":[],"permissions":[]}
                     """.utf8))
-            let model = MacSidebarSearchModel(currentUserID: 1, store: store)
+            let model = ConversationSearchModel(currentUserID: 1, store: store)
             defer { model.stop() }
             model.query = "mika"
             model.start()
@@ -66,9 +66,142 @@ import ChahuaAPI
             }
             XCTAssertEqual(model.results(in: .active).map(\.id), ["dm"])
             XCTAssertFalse(model.state(for: .active).hasMore)
+            model.reconcileSelection()
+            model.moveSelection(by: 1)
+            var openedChatID: String?
+            model.open(
+                onOpenChat: { openedChatID = $0.id },
+                onOpenProfile: { _ in XCTFail("A chat selection must not open a profile") },
+                onOpenInvite: { _ in XCTFail("A chat selection must not open an invite") })
+            XCTAssertEqual(openedChatID, "archive")
+            model.query = "product"
+            XCTAssertEqual(model.results(in: .active).map(\.id), ["main"])
+            XCTAssertTrue(model.results(in: .archived).isEmpty)
+            model.query = "mika"
             store.currentUserProfile = nil
             XCTAssertFalse(model.isAvailable)
             XCTAssertTrue(model.results(in: .archived).isEmpty)
+        }
+
+        func testConversationSearchReusesLoadedChatsAndRejectsReplacedSession() async throws {
+            let api = FakeChatAPI(
+                chatResults: [
+                    .success(
+                        .init(chats: [
+                            .init(
+                                id: "main", name: "Product Crit", unreadCount: 0,
+                                archived: false, kind: .group)
+                        ]))
+                ])
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}
+            )
+            defer { store.reset() }
+            let profile = try JSONDecoder().decode(
+                MeResponse.self,
+                from: Data(
+                    """
+                    {"uid":1,"username":"Account 1","gender":0,"stickerPackOrder":[],"permissions":[]}
+                    """.utf8))
+            store.currentUserProfile = profile
+            await store.loadActiveChats()
+            let model = ConversationSearchModel(currentUserID: 1, store: store)
+            defer { model.stop() }
+            model.query = "product"
+            model.start()
+            XCTAssertEqual(model.results(in: .active).map(\.id), ["main"])
+            model.query = "mika"
+            XCTAssertTrue(model.results(in: .active).isEmpty)
+            store.reset()
+            store.currentUserProfile = profile
+            model.start()
+            XCTAssertFalse(model.isAvailable)
+            XCTAssertTrue(model.results(in: .active).isEmpty)
+        }
+
+        func testSidebarSearchKeepsInputMountedAndMouseCancelClosesSearch() async throws {
+            let selection = Selection()
+            let host = NSHostingController(
+                rootView: SelectionSurface(selection: selection, showsSearchSidebar: true))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 300, height: 560),
+                styleMask: [.titled, .closable, .fullSizeContentView],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.makeKeyAndOrderFront(nil)
+            defer { window.close() }
+            await settle(window)
+            XCTAssertFalse(selection.isSearching, "Opening the window must not activate search")
+
+            func input(in view: NSView) -> NSTextField? {
+                if let field = view as? NSTextField, field.isEditable { return field }
+                return view.subviews.lazy.compactMap { input(in: $0) }.first
+            }
+            let original = try XCTUnwrap(input(in: host.view))
+            let originalFrame = original.convert(original.bounds, to: nil)
+            for query in ["", "mika"] {
+                selection.query = query
+                selection.isSearching = true
+                selection.focusRequest += 1
+                await settle(window)
+                let active = try XCTUnwrap(input(in: host.view))
+                XCTAssertTrue(active === original, "Activation must keep the original native input")
+                XCTAssertEqual(active.convert(active.bounds, to: nil), originalFrame)
+
+                let bitmap = try XCTUnwrap(
+                    host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+                host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+                let capture = XCTAttachment(
+                    data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                    uniformTypeIdentifier: "public.png")
+                capture.name =
+                    query.isEmpty ? "Empty search with cancel" : "Search query with cancel"
+                capture.lifetime = .keepAlways
+                add(capture)
+
+                // Click the trailing cancel target in the actual 300pt sidebar.
+                let fieldFrame = active.convert(active.bounds, to: host.view)
+                let point = host.view.convert(
+                    NSPoint(x: host.view.bounds.maxX - 33, y: fieldFrame.midY), to: nil)
+                let timestamp = ProcessInfo.processInfo.systemUptime
+                let release = try XCTUnwrap(
+                    NSEvent.mouseEvent(
+                        with: .leftMouseUp, location: point, modifierFlags: [],
+                        timestamp: timestamp + 0.01, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 1, clickCount: 1, pressure: 0))
+                let press = try XCTUnwrap(
+                    NSEvent.mouseEvent(
+                        with: .leftMouseDown, location: point, modifierFlags: [],
+                        timestamp: timestamp, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+                NSApp.postEvent(release, atStart: true)
+                NSApp.sendEvent(press)
+                await settle(window)
+                XCTAssertFalse(
+                    selection.isSearching, "Cancel must restore the list, not only clear text")
+                XCTAssertEqual(selection.query, "")
+                let inactive = try XCTUnwrap(input(in: host.view))
+                XCTAssertTrue(inactive === original)
+                XCTAssertEqual(inactive.convert(inactive.bounds, to: nil), originalFrame)
+            }
+            for query in ["", "mika"] {
+                selection.query = query
+                selection.isSearching = true
+                selection.focusRequest += 1
+                await settle(window)
+                let escape = try XCTUnwrap(
+                    NSEvent.keyEvent(
+                        with: .keyDown, location: .zero, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil,
+                        characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                        isARepeat: false, keyCode: 53))
+                NSApp.sendEvent(escape)
+                await settle(window)
+                XCTAssertEqual(selection.query, "")
+                XCTAssertFalse(selection.isSearching, "One Escape must return to the list")
+            }
         }
 
         func testArchiveSidebarKeepsWindowControlsAndRestoresMainScope() async throws {
@@ -103,8 +236,12 @@ import ChahuaAPI
                     activeBadges: ConversationTabBadges(),
                     archivedBadges: ConversationTabBadges(archived: true),
                     badgeColor: ConversationListPreferences.defaultUnreadBadgeColor,
-                    selection: scopeBinding, onSearch: {}, onBack: {}
-                ) { opacity in
+                    selection: scopeBinding, onBack: {}
+                ) {
+                    MacSidebarSearchField(
+                        query: .constant(""), isSearching: false, focusRequest: 0,
+                        onActivate: {}, onClose: {}, onSubmit: {}, onMoveSelection: { _ in })
+                } header: { opacity in
                     MacConversationListHeader(
                         isUpdating: false,
                         account: { Text("C") }, actions: { Image(systemName: "plus") }
@@ -116,6 +253,8 @@ import ChahuaAPI
                         scope: scopeBinding, archivedMode: archived,
                         showsExternalHeader: true, isActive: archived == browsingArchived,
                         selectedConversationID: nil, onSelectConversation: { _ in })
+                } search: {
+                    EmptyView()
                 }
                 .frame(width: 300, height: 560)
                 .background(Color(nsColor: .windowBackgroundColor))
@@ -333,28 +472,64 @@ import ChahuaAPI
 
         private final class Selection: ObservableObject {
             @Published var chat: String?
+            @Published var isSearching = false
+            @Published var query = ""
+            @Published var focusRequest = 0
         }
 
         private struct SelectionSurface: View {
             @ObservedObject var selection: Selection
+            var showsSearchSidebar = false
 
             var body: some View {
-                ChatSplitLayout(hasSelection: selection.chat != nil) { _ in
-                    Text("Chats").frame(maxWidth: .infinity, maxHeight: .infinity)
-                } detail: { _ in
-                    NavigationStack {
-                        Group {
-                            if let chat = selection.chat {
-                                Text(chat).navigationTitle(chat)
-                            } else {
-                                Text("Select a conversation")
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if showsSearchSidebar {
+                    MacArchiveSidebar(
+                        isArchived: false, isSearching: selection.isSearching,
+                        activeBadges: ConversationTabBadges(),
+                        archivedBadges: ConversationTabBadges(archived: true),
+                        badgeColor: ConversationListPreferences.defaultUnreadBadgeColor,
+                        selection: .constant(.messages), onBack: {}
+                    ) {
+                        MacSidebarSearchField(
+                            query: $selection.query, isSearching: selection.isSearching,
+                            focusRequest: selection.focusRequest,
+                            onActivate: { selection.isSearching = true },
+                            onClose: {
+                                selection.isSearching = false
+                                selection.query = ""
+                            },
+                            onSubmit: {}, onMoveSelection: { _ in })
+                    } header: { opacity in
+                        MacConversationListHeader(
+                            isUpdating: false, controlsOpacity: opacity,
+                            account: { Text("C") }, actions: { Image(systemName: "plus") })
+                    } list: { _ in
+                        Text("Chats").frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } search: {
+                        Text("Search results").frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                    .frame(width: 300, height: 560)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, .light)
+                    .environment(\.isWideChatLayout, true)
+                } else {
+                    ChatSplitLayout(hasSelection: selection.chat != nil) { _ in
+                        Text("Chats").frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } detail: { _ in
+                        NavigationStack {
+                            Group {
+                                if let chat = selection.chat {
+                                    Text(chat).navigationTitle(chat)
+                                } else {
+                                    Text("Select a conversation")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
+                    .frame(minWidth: 900, minHeight: 600)
+                    .modifier(MacConversationWindowChrome())
                 }
-                .frame(minWidth: 900, minHeight: 600)
-                .modifier(MacConversationWindowChrome())
             }
         }
     }

@@ -4,8 +4,8 @@ import Foundation
 
 /// Chat-scoped message search state.
 ///
-/// The shell retains one model per selected chat so dismissing the search sheet
-/// to read a result and reopening it restores the query, ordering, and loaded pages.
+/// The shell retains one model per selected chat so dismissing search and reopening
+/// it restores the query, ordering, selected result, and loaded pages.
 @MainActor
 final class MessageSearchModel: ObservableObject {
     enum Phase: Equatable {
@@ -50,6 +50,10 @@ final class MessageSearchModel: ObservableObject {
     @Published private(set) var nextOffset: Int?
     @Published private(set) var isLoadingMore = false
     @Published private(set) var loadMoreFailed = false
+    @Published var selectedMessageID: MessageID?
+
+    /// The normalized query that owns the displayed results.
+    var resultsQuery: String { activeRequest?.q ?? "" }
 
     private let search: Search
     private let debounce: Duration

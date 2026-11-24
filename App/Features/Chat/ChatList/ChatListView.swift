@@ -45,10 +45,7 @@ struct ChatListView: View {
     @State private var notificationChat: ChatListItem?
     @State private var archiveConfirmation: ArchiveConfirmation?
     @StateObject private var scrollScope = ConversationListScrollScope()
-    @State private var searchText = ""
     @State private var isListVisible = false
-    @State private var presentationGeneration = 0
-    @FocusState private var isSearchFocused: Bool
     #if os(iOS)
         @Environment(\.conversationListBottomSafeArea) private var bottomSafeArea
     #endif
@@ -173,26 +170,10 @@ struct ChatListView: View {
     private var listViewport: some View {
         #if os(iOS)
             GeometryReader { geometry in
-                listContent(bottomInset: bottomSafeArea ?? geometry.safeAreaInsets.bottom)
+                conversationList(bottomInset: bottomSafeArea ?? geometry.safeAreaInsets.bottom)
             }
         #else
-            listContent(bottomInset: 0)
-        #endif
-    }
-
-    @ViewBuilder
-    private func listContent(bottomInset: CGFloat) -> some View {
-        #if os(macOS)
-            // Native List scroll-offset restoration must not compete with header
-            // safe-area insets. Give macOS chrome its own space above the viewport.
-            VStack(spacing: 0) {
-                if isWideChatLayout && !showsExternalHeader {
-                    wideSearchHeader
-                }
-                conversationList(bottomInset: bottomInset)
-            }
-        #else
-            conversationList(bottomInset: bottomInset)
+            conversationList(bottomInset: 0)
         #endif
     }
 
@@ -400,10 +381,7 @@ struct ChatListView: View {
                     ) {
                         searchControls
                     } feedback: {
-                        if !searchText.isEmpty {
-                            searchUnavailableFeedback
-                                .padding(.horizontal, 16)
-                        }
+                        EmptyView()
                     }
                     .allowsHitTesting(scrollScope.isSearchRevealed)
                     .accessibilityIdentifier("conversation-search-drawer")
@@ -441,15 +419,8 @@ struct ChatListView: View {
         }
         .background {
             HStack(spacing: 0) {
-                Button("Search conversations") {
-                    #if os(macOS)
-                        onSearch?()
-                    #else
-                        revealSearch()
-                        isSearchFocused = true
-                    #endif
-                }
-                .keyboardShortcut("f", modifiers: .command)
+                Button("Search conversations") { revealSearch() }
+                    .keyboardShortcut("k", modifiers: .command)
                 Button("Refresh conversations") { Task { await performManualRefresh() } }
                     .keyboardShortcut("r", modifiers: .command)
             }
@@ -470,23 +441,17 @@ struct ChatListView: View {
             ) { request in
                 switch request {
                 case .reset:
-                    isSearchFocused = false
-                    searchText = ""
-                    presentationGeneration = presentation?.resetGeneration ?? 0
                     scrollScope.reset()
                     scrollScope.isSearchPinned = isSearchPinned
                 case .revealSearch:
                     if isListVisible { revealSearch() }
                 case .dismissSearchKeyboard:
-                    isSearchFocused = false
+                    break
                 }
             }
             .onChange(of: isSearchPinned) { _, pinned in scrollScope.isSearchPinned = pinned }
             .onChange(of: usesPrototypePull) { _, enabled in
                 scrollScope.prototypePullEnabled = enabled
-            }
-            .onChange(of: prototypeSearchAdditionalHeight) { _, height in
-                scrollScope.prototypeSearchAdditionalHeight = height
             }
             .onChange(of: scope) { _, _ in resetScopePresentation() }
             .onChange(of: archivedMode) { _, _ in resetScopePresentation() }
@@ -549,9 +514,7 @@ struct ChatListView: View {
             }
     }
 
-    private var isSearchPinned: Bool {
-        isWideChatLayout || isSearchFocused || !searchText.isEmpty
-    }
+    private var isSearchPinned: Bool { isWideChatLayout }
 
     private var usesPrototypePull: Bool {
         #if os(iOS)
@@ -561,12 +524,8 @@ struct ChatListView: View {
         #endif
     }
 
-    private var prototypeSearchAdditionalHeight: CGFloat {
-        usesPrototypePull && !searchText.isEmpty ? 32 : 0
-    }
-
     private var prototypeSearchHeight: CGFloat {
-        ConversationListScrollScope.prototypeDrawerHeight + prototypeSearchAdditionalHeight
+        ConversationListScrollScope.prototypeDrawerHeight
     }
 
     private var usesDesktopDensity: Bool {
@@ -582,16 +541,11 @@ struct ChatListView: View {
     }
 
     private func revealSearch() {
-        #if os(macOS)
-            onSearch?()
-        #else
-            // Wide search is already visible; revealing a pull drawer would reset the list offset.
-            if !isWideChatLayout { scrollScope.revealSearch() }
-        #endif
+        onSearch?()
     }
 
     private var searchDrawerHeight: CGFloat {
-        ConversationListScrollScope.drawerHeight + (searchText.isEmpty ? 0 : 32)
+        ConversationListScrollScope.drawerHeight
     }
 
     private var searchDrawer: some View {
@@ -599,10 +553,6 @@ struct ChatListView: View {
             searchControls
                 .padding(.horizontal, 12)
                 .frame(height: searchRowHeight, alignment: usesDesktopDensity ? .top : .center)
-            if !searchText.isEmpty {
-                searchUnavailableFeedback
-                    .padding(.horizontal, 12)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
@@ -611,58 +561,24 @@ struct ChatListView: View {
         .accessibilityIdentifier("conversation-search-drawer")
     }
 
-    private var searchUnavailableFeedback: some View {
-        Text("Search is not available yet.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(height: 32, alignment: .topLeading)
-            .accessibilityIdentifier("conversation-search-unavailable")
-    }
-
     @ViewBuilder
     private var searchControls: some View {
-        #if os(macOS)
-            MacSidebarSearchButton(onSearch: onSearch)
-        #else
-            HStack(spacing: 10) {
-                HStack(spacing: usesDesktopDensity ? 6 : 8) {
+        #if os(iOS)
+            Button(action: revealSearch) {
+                HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
-                        .font(usesDesktopDensity ? .system(size: 14) : .body)
-                        .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
-                    TextField(
-                        isWideChatLayout
-                            ? LocalizedStringKey(usesDesktopDensity ? "Search (⌘K)" : "Search")
-                            : LocalizedStringKey("Search chats, messages, people"),
-                        text: $searchText
-                    )
-                    .textFieldStyle(.plain)
-                    .focused($isSearchFocused)
-                    .submitLabel(.search)
-                    .accessibilityHint("Search is not available yet.")
+                    Text("Search chats and people")
+                    Spacer(minLength: 0)
                 }
-                .font(usesDesktopDensity ? .system(size: 13) : .body)
-                .padding(.horizontal, usesDesktopDensity ? 8 : (usesPrototypePull ? 14 : 12))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, usesPrototypePull ? 14 : 12)
                 .frame(height: searchControlHeight)
-                .background {
-                    if isWideChatLayout {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.secondary.opacity(0.1))
-                    } else {
-                        Capsule().fill(searchControlFill)
-                    }
-                }
-                if isSearchFocused || !searchText.isEmpty {
-                    Button("Cancel") {
-                        isSearchFocused = false
-                        searchText = ""
-                        if !isWideChatLayout { scrollScope.cancelSearch() }
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.cancelAction)
-                    .foregroundStyle(.blue)
-                }
+                .background(searchControlFill, in: Capsule(style: .circular))
+                .contentShape(Capsule(style: .circular))
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Search conversations")
         #endif
     }
 
@@ -675,13 +591,7 @@ struct ChatListView: View {
 
     private func configureListPresentation() {
         isListVisible = true
-        if let presentation, presentationGeneration != presentation.resetGeneration {
-            isSearchFocused = false
-            searchText = ""
-            presentationGeneration = presentation.resetGeneration
-        }
         scrollScope.prototypePullEnabled = usesPrototypePull
-        scrollScope.prototypeSearchAdditionalHeight = prototypeSearchAdditionalHeight
         scrollScope.activate()
         scrollScope.presentation = presentation
         scrollScope.select(scope: scope, archived: archivedMode, currentUserID: currentUserID)
@@ -691,15 +601,9 @@ struct ChatListView: View {
 
     private func resetScopePresentation(preservingSearch: Bool = true) {
         revealedConversationID = nil
-        // Scope changes preserve an active query; account changes must discard it.
         scrollScope.select(
             scope: scope, archived: archivedMode, currentUserID: currentUserID,
             preservingSearch: preservingSearch && isSearchPinned)
-        if !preservingSearch {
-            isSearchFocused = false
-            searchText = ""
-        }
-        scrollScope.prototypeSearchAdditionalHeight = prototypeSearchAdditionalHeight
         scrollScope.isSearchPinned = isSearchPinned
         scrollScope.onRefresh = { Task { await performManualRefresh() } }
     }

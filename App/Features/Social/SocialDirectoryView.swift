@@ -1,8 +1,7 @@
 import ChahuaAPI
 import SwiftUI
 
-/// Searches users and joined groups, not message history. User results are a bounded server search;
-/// only the group contract provides a continuation cursor.
+/// The add-friend screen shares the directory's independently retriable server searches.
 struct SocialDirectoryView: View {
     let currentUserID: Int32
     @ObservedObject var store: ChatStore
@@ -11,13 +10,23 @@ struct SocialDirectoryView: View {
     let onOpenProfile: (Int32) -> Void
 
     @State private var query = ""
-    @State private var users: [MemberSummary] = []
-    @State private var groups: [SocialGroupSummary] = []
-    @State private var cursor: String?
-    @State private var loading = false
-    @State private var opening = false
-    @State private var error: String?
-    @State private var revision = 0
+    @StateObject private var model: DirectorySearchModel
+
+    init(
+        currentUserID: Int32, store: ChatStore, usersOnly: Bool = false,
+        onOpenChat: @escaping (ChatListItem) -> Void,
+        onOpenProfile: @escaping (Int32) -> Void
+    ) {
+        self.currentUserID = currentUserID
+        self.store = store
+        self.usersOnly = usersOnly
+        self.onOpenChat = onOpenChat
+        self.onOpenProfile = onOpenProfile
+        _model = StateObject(
+            wrappedValue: DirectorySearchModel(
+                currentUserID: currentUserID, store: store,
+                includesGroups: !usersOnly, includesInvites: false))
+    }
 
     var body: some View {
         List {
@@ -31,110 +40,70 @@ struct SocialDirectoryView: View {
                         : "Search people and groups you have joined. This does not search message history."
                 )
             }
-            if loading && users.isEmpty && groups.isEmpty { ProgressView("Searching…") }
-            if let error {
-                Section {
-                    Text(error).foregroundStyle(.red)
-                    Button("Retry") { Task { await search() } }
-                }
-            }
-            if !users.isEmpty {
-                Section("People") {
-                    ForEach(users, id: \.uid) { user in
+            if !usersOnly,
+                !model.groups.isEmpty || model.groupsPhase == .loading
+                    || model.groupsPhase == .failed
+            {
+                Section("Chats") {
+                    ForEach(model.groups) { group in
                         Button {
-                            onOpenProfile(user.uid)
-                        } label: {
-                            SocialUserRow(user: user)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            if !usersOnly && !groups.isEmpty {
-                Section("Joined Groups") {
-                    ForEach(groups) { group in
-                        Button {
-                            Task { await open(group.id) }
+                            Task {
+                                if let chat = await model.openGroup(group.id) { onOpenChat(chat) }
+                            }
                         } label: {
                             HStack {
                                 AvatarView(
                                     url: group.avatar.flatMap(URL.init(string:)),
                                     displayName: group.name, diameter: 40)
                                 Text(group.name).foregroundStyle(.primary)
+                                Spacer()
+                                if model.openingGroupID == group.id { ProgressView() }
                             }
                         }
-                        .disabled(opening)
+                        .disabled(model.openingGroupID != nil)
                     }
-                    if cursor != nil {
-                        Button("Load more groups") { Task { await search(more: true) } }
-                            .disabled(loading)
+                    if model.groupsPhase == .loading {
+                        ProgressView("Searching…")
+                    } else if model.groupsPhase == .failed {
+                        Text("Could not load groups").foregroundStyle(.secondary)
+                        Button("Retry") { model.retryGroups() }
+                    } else if model.nextGroupCursor != nil {
+                        Button("Load more groups") { model.loadMoreGroups() }
                     }
                 }
             }
-            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                !loading, error == nil, users.isEmpty, groups.isEmpty
+            if !model.people.isEmpty || model.peoplePhase == .loading
+                || model.peoplePhase == .failed
             {
-                Text("No results").foregroundStyle(.secondary)
+                Section("People") {
+                    ForEach(model.people, id: \.uid) { user in
+                        Button {
+                            guard model.canOpenPerson(user.uid) else { return }
+                            onOpenProfile(user.uid)
+                        } label: {
+                            SocialUserRow(user: user)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if model.peoplePhase == .loading {
+                        ProgressView("Searching…")
+                    } else if model.peoplePhase == .failed {
+                        Text("Could not load people").foregroundStyle(.secondary)
+                        Button("Retry") { model.retryPeople() }
+                    }
+                }
+            }
+            if let error = model.openingError { Text(error).foregroundStyle(.red) }
+            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                model.isSettled, model.people.isEmpty, model.groups.isEmpty
+            {
+                Text("No results found").foregroundStyle(.secondary)
             }
         }
         .navigationTitle(usersOnly ? LocalizedStringKey("Add Friend") : "Directory")
-        .task(id: query) {
-            do {
-                try await Task.sleep(for: .milliseconds(250))
-                await search()
-            } catch {}
-        }
-    }
-
-    private func search(more: Bool = false) async {
-        guard store.currentUserProfile?.uid == currentUserID else { return }
-        revision &+= 1
-        let requestRevision = revision
-        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !more {
-            users = []
-            groups = []
-            cursor = nil
-        }
-        error = nil
-        guard !term.isEmpty else {
-            loading = false
-            return
-        }
-        loading = true
-        defer { if revision == requestRevision { loading = false } }
-        do {
-            async let people: SearchUsersResponse? = more ? nil : store.searchUsers(query: term)
-            async let joined: SocialGroupsResponse? =
-                usersOnly ? nil : store.searchJoinedGroups(query: term, after: more ? cursor : nil)
-            let (userPage, groupPage) = try await (people, joined)
-            try Task.checkCancellation()
-            guard revision == requestRevision, store.currentUserProfile?.uid == currentUserID,
-                query.trimmingCharacters(in: .whitespacesAndNewlines) == term
-            else { return }
-            if let userPage { users = userPage.members }
-            if let groupPage {
-                let existing = Set(groups.map(\.id))
-                groups += groupPage.groups.filter { !existing.contains($0.id) }
-                cursor = groupPage.nextCursor
-            }
-        } catch {
-            guard revision == requestRevision, store.currentUserProfile?.uid == currentUserID,
-                !(error is CancellationError), !Task.isCancelled
-            else { return }
-            self.error = error.localizedDescription
-        }
-    }
-
-    private func open(_ id: String) async {
-        guard !opening else { return }
-        opening = true
-        defer { opening = false }
-        do {
-            let chat = try await store.socialChat(id: id)
-            guard store.currentUserProfile?.uid == currentUserID else { return }
-            onOpenChat(chat)
-        } catch { self.error = error.localizedDescription }
+        .onAppear { model.start() }
+        .onDisappear { model.stop() }
+        .onChange(of: query) { _, value in model.search(value) }
     }
 }
 

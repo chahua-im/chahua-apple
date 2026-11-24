@@ -52,6 +52,7 @@ Third-party code that must live in-repo (patched forks, non-SPM C/C++, binary xc
 - When a change fixes a GitHub issue, include a closing keyword and the issue reference in the pull request description or commit message, for example `Fixes #23` or `Closes chahua-im/chahua-apple#23`. GitHub closes the issue when the fix merges into the default branch (`main`).
 - Use a closing keyword only when the change fully resolves the issue. Use `Refs #23` for partial work.
 - Do not use `Fixes issue://23`: GitHub does not recognize that reference for automatic closure.
+- DO NOT COMMIT or PUSH unless the user explicitly asked to
 
 ## Localization
 

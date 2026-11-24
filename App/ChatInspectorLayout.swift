@@ -5,6 +5,9 @@ import SwiftUI
 struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
     @Binding var isPresented: Bool
     var freezesPresentation = false
+    /// Message search stays beside the timeline, even when the detail is too narrow
+    /// to reserve a column. Chat Info retains its existing modal fallback.
+    var overlaysWhenNarrow = false
     @ViewBuilder var detail: () -> Detail
     @ViewBuilder var inspector: () -> Inspector
     @State private var presentedInline: Bool?
@@ -43,7 +46,22 @@ struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
-            .voicePlaybackCovered(isPresented && !presentsInline)
+            .voicePlaybackCovered(isPresented && !presentsInline && !overlaysWhenNarrow)
+            .overlay(alignment: .trailing) {
+                if isPresented && !presentsInline && overlaysWhenNarrow {
+                    inspector()
+                        .environment(\.chatInfoIsModal, false)
+                        .frame(width: min(Self.inspectorWidth, geometry.size.width))
+                        #if os(macOS)
+                            .modifier(MacChatInfoSurface())
+                        #else
+                            .background(.background)
+                        #endif
+                        .padding(.trailing, ChatSplitMetrics.outerInset)
+                        .padding(.vertical, ChatSplitMetrics.outerInset)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
             .onChange(of: fitsInline, initial: true) { _, value in
                 if presentedInline == nil || !freezesPresentation { presentedInline = value }
             }
@@ -52,8 +70,10 @@ struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
             }
             .sheet(
                 isPresented: Binding(
-                    get: { isPresented && !presentsInline },
-                    set: { if !$0 && !presentsInline { isPresented = false } }
+                    get: { isPresented && !presentsInline && !overlaysWhenNarrow },
+                    set: {
+                        if !$0 && !presentsInline && !overlaysWhenNarrow { isPresented = false }
+                    }
                 )
             ) {
                 inspector()

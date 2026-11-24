@@ -31,7 +31,8 @@ struct ThreadSubscriptionMenu: View {
                     .font(
                         .system(
                             size: usesDesktopChrome ? 18 : 17,
-                            weight: usesDesktopChrome ? .regular : .semibold))
+                            weight: usesDesktopChrome ? .regular : .semibold)
+                    )
                     .foregroundStyle(isActive ? Color.accentColor : .secondary)
             }
         }

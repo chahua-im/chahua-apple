@@ -316,7 +316,8 @@ struct ChatFloatingHeader<Avatar: View>: View {
             if usesDesktopChrome {
                 if let onForward {
                     wideControl(
-                        "Forward Thread", systemImage: "arrowshape.turn.up.right", action: onForward)
+                        "Forward Thread", systemImage: "arrowshape.turn.up.right", action: onForward
+                    )
                 }
                 if trailingIsControl {
                     // The slot is already a button; do not add glass or an info button

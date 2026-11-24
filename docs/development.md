@@ -18,6 +18,12 @@ Swift 6.4 can assert while resolving chained observable-object dictionary lookup
 
 Simulator builds use ad-hoc signing (“Sign to Run Locally”); they do not need device provisioning profiles. If signing `ChahuaMarkdown_ChahuaMarkdown.bundle` reports `bundle format unrecognized, invalid, or unsuitable`, clean the build folder (**Product → Clean Build Folder**) and rebuild. Older builds copied a literal `Resources` directory into the bundle root, which codesign misidentifies as a different bundle layout. The package now processes resources into the platform-appropriate layout, and the highlighter loads `highlight.js` from the bundle root.
 
+## macOS Debug sandbox
+
+The macOS app's `Debug` configuration disables App Sandbox. `Local`, `Profile`, and `Release` remain sandboxed, and hardened runtime stays enabled in every configuration. iOS sandboxing is unchanged.
+
+Unsandboxed Debug builds can use local-data paths outside the app container. Existing container-backed caches and preferences may not appear; do not delete the container to switch configurations. Use a sandboxed configuration to check file permissions and container behavior before release.
+
 ## macOS self-updates
 
 The directly distributed macOS app uses Sparkle's standard update UI. Only the macOS `Release` configuration enables the updater; Debug, Local, Profile, previews, fixture modes, and hosted tests do not start it. The application menu contains **Check for Updates…**, disabled when updating is unavailable.
@@ -74,9 +80,13 @@ Profile Close clears the selection owned by its presenter, including profiles la
 
 For verification, open Chat Info wide, narrow until it becomes modal, open a profile above it, close the profile, and widen again. Info should return to the sidebar without closing; a profile opened wide must still be modal. Check Close, native nested-page Back, privacy, mute/search, member navigation, attachment kinds, threads, Message, Forum Profile and safety actions. Repeat in an iPad narrow window and verify the macOS native toolbar remains intact.
 
-Wide timelines cap bubbles at 620pt, use 24pt side padding, and retain the user's message text size. Wide conversation-list search is always visible but remains explicitly unavailable; in-chat message search is a separate working feature.
+Wide timelines cap bubbles at 620pt, use 24pt side padding, and retain the user's message text size. Conversation-list search discovers people and joined groups and matches active and archived conversation titles. It does not search message text across chats. In-chat message search remains a separate feature.
 
-Compact iOS chat-list pulling reveals Search before arming refresh. The native scroll bridge owns drawer insets and row displacement; do not add a second SwiftUI spacer. Refresh holds the drawer open until the request completes without focusing the keyboard. Global search remains unavailable.
+The macOS sidebar owns one persistent search input above both the conversation list and search results. Keep its position and dimensions unchanged when search activates; do not add another field to the results view. The trailing close control cancels search, including an empty query, and restores the retained list.
+
+On macOS, the shell retains one message-search model for the selected chat, including when a result opens a thread. Search and Chat Info share one side-panel slot. Search uses the inspector's width when space permits and overlays the timeline when space is limited; closing it retains the query and results until the selected chat changes.
+
+Compact iOS chat-list pulling reveals Search before arming refresh. The native scroll bridge owns drawer insets and row displacement; do not add a second SwiftUI spacer. Refresh holds the drawer open until the request completes without focusing the keyboard. Opening Search preserves the list underneath its results.
 
 New macOS windows default to 1280×800pt, constrained per dimension to the main display's usable `visibleFrame` (excluding Dock/menu bar), subject to existing content minimums. This uses only SwiftUI `defaultSize`, compatible with macOS 14; the stable scene retains native frame restoration and never resizes/recenters an attached window. Restored geometry takes precedence over the initial default. A native scene smoke opened at 1280×800 within the screen and retained a user resize/reposition to 900×650 through layout. Quit/relaunch restoration and changing display arrangements remain manual checks.
 
