@@ -332,7 +332,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
                         .contentShape(Rectangle())
                 }
                 #if os(macOS)
-                    .menuStyle(.borderlessButton)
+                    // Borderless menus shrink their label; use the same plain button
+                    // presentation as the adjacent toolbar actions to preserve symbol size.
+                    .menuStyle(.button)
                     .menuIndicator(.hidden)
                 #endif
                 .buttonStyle(.plain)

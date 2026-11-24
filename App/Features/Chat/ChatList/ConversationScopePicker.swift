@@ -5,7 +5,7 @@ struct ConversationScopePicker: View {
     @Binding var selection: ConversationListScope
     var badges = ConversationTabBadges()
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
-    // macOS archive navigation keeps the tab geometry fixed while only counts fade.
+    // Cross-fade centered labels so an invisible badge cannot offset the visible title.
     var archivedBadges: ConversationTabBadges? = nil
     var archiveProgress: CGFloat = 0
 
@@ -28,24 +28,12 @@ struct ConversationScopePicker: View {
                 Button {
                     selection = scope
                 } label: {
-                    HStack(spacing: 3) {
-                        Text(scope.localizedTitle)
-                            .font(
-                                .system(
-                                    size: desktop ? 12 : 14,
-                                    weight: selection == scope ? .semibold : .medium)
-                            )
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
+                    ZStack {
+                        wideLabel(badges, scope: scope, desktop: desktop)
+                            .opacity(archivedBadges == nil ? 1 : 1 - archiveProgress)
                         if let archivedBadges {
-                            ZStack {
-                                wideBadge(badges, scope: scope, desktop: desktop)
-                                    .opacity(1 - archiveProgress)
-                                wideBadge(archivedBadges, scope: scope, desktop: desktop)
-                                    .opacity(archiveProgress)
-                            }
-                        } else {
-                            wideBadge(badges, scope: scope, desktop: desktop)
+                            wideLabel(archivedBadges, scope: scope, desktop: desktop)
+                                .opacity(archiveProgress)
                         }
                     }
                     .foregroundStyle(Color.primary)
@@ -72,6 +60,22 @@ struct ConversationScopePicker: View {
         }
         .padding(2)
         .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func wideLabel(
+        _ values: ConversationTabBadges, scope: ConversationListScope, desktop: Bool
+    ) -> some View {
+        HStack(spacing: 3) {
+            Text(scope.localizedTitle)
+                .font(
+                    .system(
+                        size: desktop ? 12 : 14,
+                        weight: selection == scope ? .semibold : .medium)
+                )
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            wideBadge(values, scope: scope, desktop: desktop)
+        }
     }
 
     @ViewBuilder
