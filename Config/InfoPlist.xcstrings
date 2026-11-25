@@ -49,7 +49,28 @@
       }
     },
     "Chahua composer media slot" : {
-
+      "comment" : "Description of the exported composer media drag-and-drop type.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chahua composer media slot"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "茶话编辑器媒体槽位"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "茶話編輯器媒體槽位"
+          }
+        }
+      }
     },
     "NSCameraUsageDescription" : {
       "comment" : "Privacy - Camera Usage Description",

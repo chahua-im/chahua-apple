@@ -70,6 +70,26 @@ def inventory(directories, errors):
     return live, required
 
 
+def plist_references(plist):
+    """Nested type descriptions use their text as the catalog key, not the plist key."""
+    references = dict(plist)
+
+    def visit(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "UTTypeDescription" and isinstance(child, str):
+                    # Keep top-level source values, including privacy usage descriptions.
+                    references.setdefault(child, child)
+                elif isinstance(child, (dict, list)):
+                    visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(plist)
+    return references
+
+
 def check_catalog(relative, live, required, errors, external_prefix=None, source_values=None):
     path = ROOT / relative
     data = json.loads(path.read_text())
@@ -120,8 +140,8 @@ def main():
     plist_values = {}
     for path in (ROOT / "Config").glob("*.plist"):
         with path.open("rb") as file:
-            plist_values.update(plistlib.load(file))
-    count += check_catalog("Config/InfoPlist.xcstrings", set(plist_values), {}, errors,
+            plist_values.update(plist_references(plistlib.load(file)))
+    count += check_catalog("Config/InfoPlist.xcstrings", {normalized(key) for key in plist_values}, {}, errors,
                            source_values=plist_values)
     if errors:
         print("Localization check failed:\n" + "\n".join(errors), file=sys.stderr)

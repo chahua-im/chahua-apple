@@ -178,6 +178,7 @@ case "${1:-}" in
     ;;
   style)
     bash "$(dirname -- "${BASH_SOURCE[0]}")/../format.sh" --check
+    python3 "$(dirname -- "${BASH_SOURCE[0]}")/test_check_localizations.py"
     python3 "$(dirname -- "${BASH_SOURCE[0]}")/check-localizations.py"
     ;;
   *)
