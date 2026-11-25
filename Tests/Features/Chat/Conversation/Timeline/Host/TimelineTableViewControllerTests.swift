@@ -357,9 +357,15 @@
                     return
                 }
                 XCTAssertEqual(row.groupPosition, .middle)
+                let sourceRect = CGRect(x: 300, y: 80, width: 220, height: 60)
+                let bubble = TimelineBubbleContentView(
+                    frame: CGRect(origin: .zero, size: sourceRect.size))
+                bubble.bind(binding)
+                bubble.layoutSubtreeIfNeeded()
+                let contour = try XCTUnwrap(bubble.interactionContour)
                 overlay.configure(
                     row: row, context: .init(canWrite: true), actions: binding.actions,
-                    sourceRect: CGRect(x: 300, y: 80, width: 220, height: 60))
+                    sourceRect: sourceRect, sourceContour: contour.normalized(using: .winding))
                 overlay.layoutSubtreeIfNeeded()
             }
             func menuButton(_ key: String.LocalizationValue) throws -> NSButton {

@@ -1,4 +1,5 @@
 import ChahuaAPI
+import CoreGraphics
 import Foundation
 
 struct TimelineRowContext: Equatable {
@@ -15,6 +16,10 @@ struct MessageInteractionSource {
     let rect: CGRect
     let presentation: TimelineRowPresentation
     let layout: TimelineRowLayout
+    #if os(macOS)
+        /// Bubble-local coordinates, captured from the native fill or clipping path.
+        let contour: CGPath
+    #endif
     #if os(iOS)
         var pressFeedback: MessageBubblePressFeedback? = nil
     #endif

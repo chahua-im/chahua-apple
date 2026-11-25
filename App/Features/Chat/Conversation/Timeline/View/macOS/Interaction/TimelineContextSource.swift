@@ -66,6 +66,7 @@
                 row.entry.messageType != .system,
                 let open = binding.actions.openContextMenu,
                 let bubble = binding.layout.frames[.bubble],
+                let contour = rowView.interactionContour,
                 let content = rowView.window?.contentView,
                 !rowView.isHiddenOrHasHiddenAncestor,
                 rowView.visibleRect.intersects(bubble)
@@ -74,7 +75,8 @@
                 row,
                 MessageInteractionSource(
                     rect: topOrigin(rowView.convert(bubble, to: content), in: content),
-                    presentation: binding.presentation, layout: binding.layout))
+                    presentation: binding.presentation, layout: binding.layout,
+                    contour: contour.normalized(using: .winding)))
             return true
         }
 

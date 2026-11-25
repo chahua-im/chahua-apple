@@ -20,6 +20,8 @@
         private var isRowHovered = false
         private var visible = false
 
+        var interactionContour: CGPath? { bubbleView?.interactionContour }
+
         override var isFlipped: Bool { true }
         override var wantsDefaultClipping: Bool { false }
 

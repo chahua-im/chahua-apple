@@ -12,6 +12,7 @@
         private struct Target {
             let key: ConversationMessageStableKey
             let sourceRect: CGRect
+            let sourceContour: CGPath
         }
 
         private let model: ConversationTimelineModel
@@ -87,7 +88,8 @@
             else { return }
             finishDismissal()
             self.timelineView = timelineView
-            target = Target(key: live.entry.stableKey, sourceRect: source.rect)
+            target = Target(
+                key: live.entry.stableKey, sourceRect: source.rect, sourceContour: source.contour)
             previousFirstResponder = window.firstResponder
             if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
                 let owner = editor.delegate as? NSResponder
@@ -174,7 +176,7 @@
             let localSource = overlay.convert(sourceInContent, from: content)
             overlay.configure(
                 row: row, context: actions.pinContext(for: row, base: context),
-                actions: actions, sourceRect: localSource)
+                actions: actions, sourceRect: localSource, sourceContour: target.sourceContour)
         }
 
         func dismiss(animated: Bool = true) {

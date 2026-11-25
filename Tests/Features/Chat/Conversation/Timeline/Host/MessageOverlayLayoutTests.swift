@@ -160,6 +160,31 @@
                 XCTAssertEqual(
                     original.convert(original.bounds, to: frameView), originalFrame,
                     "Opening the menu must not move or resize the message.")
+                let overlay = try XCTUnwrap(actionOverlay(in: frameView))
+                let highlight = try XCTUnwrap(
+                    overlay.layer?.sublayers?.compactMap { $0 as? CAShapeLayer }.first)
+                let bubbleRect = try XCTUnwrap(row.binding?.layout.frames[.bubble])
+                let sourceRect = overlay.convert(bubbleRect, from: row)
+                var transform = CGAffineTransform(
+                    translationX: sourceRect.minX, y: sourceRect.minY)
+                let contour = try XCTUnwrap(row.interactionContour)
+                    .normalized(using: .winding)
+                let expected = try XCTUnwrap(contour.copy(using: &transform))
+                XCTAssertEqual(
+                    highlight.path, expected,
+                    "The highlight must follow the actual bubble corners and tail, not its bounding box."
+                )
+                let captureRect = row.convert(bubbleRect.insetBy(dx: -12, dy: -12), to: frameView)
+                let bitmap = try XCTUnwrap(
+                    frameView.bitmapImageRepForCachingDisplay(in: captureRect))
+                frameView.cacheDisplay(in: captureRect, to: bitmap)
+                let attachment = XCTAttachment(
+                    data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                    uniformTypeIdentifier: "public.png")
+                attachment.name =
+                    "Selected \(outgoing ? "outgoing" : "incoming") bubble \(Int(width))"
+                attachment.lifetime = .keepAlways
+                add(attachment)
                 XCTAssertTrue(copyAction.isEnabled)
                 // The supported content hierarchy must receive clicks on menu actions.
                 let content = try XCTUnwrap(window.contentView)
@@ -196,6 +221,11 @@
                         $0.accessibilityLabel() == copyLabel
                     }, "Clicking title-bar chrome must dismiss the menu.")
             }
+        }
+
+        private func actionOverlay(in view: NSView) -> TimelineActionOverlayView? {
+            (view as? TimelineActionOverlayView)
+                ?? view.subviews.lazy.compactMap { self.actionOverlay(in: $0) }.first
         }
 
         private func textViews(in view: NSView) -> [AppKitMessageTextView] {

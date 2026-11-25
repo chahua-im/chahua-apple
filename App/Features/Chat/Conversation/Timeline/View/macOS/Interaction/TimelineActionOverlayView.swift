@@ -103,10 +103,12 @@
 
         func configure(
             row: TimelineMessageRow, context: MessageInteractionContext,
-            actions: TimelineBubbleActions, sourceRect: CGRect
+            actions: TimelineBubbleActions, sourceRect: CGRect, sourceContour: CGPath
         ) {
             isCleared = false
             self.source = sourceRect
+            var transform = CGAffineTransform(translationX: sourceRect.minX, y: sourceRect.minY)
+            sourceHighlight.path = sourceContour.copy(using: &transform)
             outgoing = row.isOutgoing
             let availableWidth = max(1, bounds.width - 32)
             controlsWidth = min(276, availableWidth)
@@ -309,9 +311,6 @@
             CATransaction.setDisableActions(true)
             defer { CATransaction.commit() }
             dismissButton.frame = bounds
-            sourceHighlight.path = CGPath(
-                roundedRect: source.insetBy(dx: -3, dy: -3),
-                cornerWidth: 14, cornerHeight: 14, transform: nil)
             if let placeholder = pickerPlaceholder {
                 layoutReactionPlaceholder(placeholder)
                 return

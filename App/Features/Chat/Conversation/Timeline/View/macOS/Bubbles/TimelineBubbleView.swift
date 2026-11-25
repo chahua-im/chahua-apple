@@ -37,6 +37,9 @@
         }
         private var surfaceGeometry: SurfaceGeometry?
 
+        /// Menu highlighting follows the rendered fill, or the clip for unfilled media.
+        var interactionContour: CGPath? { surface.path ?? sectionMask.path }
+
         override var isFlipped: Bool { true }
         override var wantsDefaultClipping: Bool { false }
 
