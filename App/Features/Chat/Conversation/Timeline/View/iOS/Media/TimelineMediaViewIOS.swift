@@ -705,7 +705,9 @@
                 }
             }
             imageView.setVisible(visible)
-            stickerView?.setVisible(visible)
+            // The sticker surface observes its own viewport/window lifecycle. A
+            // transient offscreen result here must not latch its requested visibility off.
+            stickerView?.setVisible(requestedVisible)
             if visible {
                 startLocalIfNeeded()
                 startOverflowBlurIfNeeded()

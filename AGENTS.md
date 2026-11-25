@@ -46,6 +46,7 @@ Third-party code that must live in-repo (patched forks, non-SPM C/C++, binary xc
 - Prefer shared SwiftUI views and controls across iOS and macOS. Use UIKit/AppKit wrappers or separate platform implementations only when a concrete requirement cannot reasonably be met with shared SwiftUI.
 - Document each new or retained platform-specific UI exception near its implementation: the requirement, the SwiftUI limitation that necessitates the exception, and why the native approach is needed. Do not add custom native UI solely to reproduce behavior SwiftUI already provides.
 - When a control needs different iOS and macOS implementations, keep a small shared wrapper that selects the platform implementation. Put each implementation in its platform subfolder rather than wrapping large view bodies in `#if os(...)`.
+- For all text input, make sure to consider IME (Input Method Editor) composing handling. Placeholders must disappear during composition, before the first candidate is committed.
 
 ### GitHub issue closure
 

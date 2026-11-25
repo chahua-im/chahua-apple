@@ -246,31 +246,83 @@ final class MediaHostingTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 0)
     }
 
-    #if os(iOS)
-        func testStickerEnteringViewportLoadsWithoutReconfiguration() async throws {
-            let requested = expectation(description: "Entering the viewport acquires the sticker")
-            let data = try makeMediaPNG(red: 255, green: 0, blue: 0)
-            let fixture = MediaImageFixture(
-                data: data,
-                suspended: true, onRequest: { requested.fulfill() })
-            MediaImageURLProtocol.install(fixture)
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
-                UUID().uuidString)
-            let cache = try ImageCache(name: UUID().uuidString, cacheDirectoryURL: directory)
-            let downloader = ImageDownloader(name: UUID().uuidString)
-            let configuration = URLSessionConfiguration.ephemeral
-            configuration.protocolClasses = [MediaImageURLProtocol.self]
-            downloader.sessionConfiguration = configuration
-            let connectivity = ConnectivityMonitor(monitorNetwork: false)
-            connectivity.update(.init(status: .satisfied, isExpensive: true))
-            let context = AppMediaContext(
-                cache: cache, downloader: downloader, connectivity: connectivity)
-            defer {
-                MediaImageURLProtocol.remove(fixture)
-                cache.clearCache()
-                try? FileManager.default.removeItem(at: directory)
-            }
+    func testStickerEnteringViewportLoadsWithoutReconfiguration() async throws {
+        let requested = expectation(description: "Entering the viewport acquires the sticker")
+        let data = try makeMediaPNG(red: 255, green: 0, blue: 0)
+        let fixture = MediaImageFixture(
+            data: data, suspended: true, onRequest: { requested.fulfill() })
+        MediaImageURLProtocol.install(fixture)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        let cache = try ImageCache(name: UUID().uuidString, cacheDirectoryURL: directory)
+        let downloader = ImageDownloader(name: UUID().uuidString)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MediaImageURLProtocol.self]
+        downloader.sessionConfiguration = configuration
+        let connectivity = ConnectivityMonitor(monitorNetwork: false)
+        connectivity.update(.init(status: .satisfied, isExpensive: true))
+        let context = AppMediaContext(
+            cache: cache, downloader: downloader, connectivity: connectivity)
+        defer {
+            MediaImageURLProtocol.remove(fixture)
+            cache.clearCache()
+            try? FileManager.default.removeItem(at: directory)
+        }
 
+        let message = try TimelineTestFixtures.message(
+            id: 1, senderID: 2, at: 0,
+            fields: [
+                "messageType": "sticker",
+                "sticker": [
+                    "id": "scrolling-sticker", "emoji": "🙂",
+                    "createdAt": "2026-09-01T00:00:00Z",
+                    "media": [
+                        "id": "sticker-media", "url": fixture.url.absoluteString,
+                        "contentType": "image/png", "size": data.count,
+                        "width": 16, "height": 16,
+                    ],
+                ],
+            ])
+        let row = TimelineRow.message(
+            .init(
+                entry: .remote(message), isOutgoing: false, groupPosition: .single,
+                showsSenderName: false))
+        let environment = TimelineLayoutEnvironment.current(timelineWidth: 320)
+        let presentation = TimelineRowPresentation.make(
+            row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
+        let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+        let frame = try XCTUnwrap(layout.frames[.media])
+        let media = TimelineMediaView(
+            frame: CGRect(origin: CGPoint(x: 20, y: 1200), size: frame.size))
+        media.bind(
+            .init(
+                presentation: presentation, layout: layout, context: .init(currentUserID: 1),
+                actions: .init(), mediaContext: context))
+        #if os(macOS)
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 320, height: 320),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
+            window.isReleasedWhenClosed = false
+            let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 320))
+            let document = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 1800))
+            scroll.documentView = document
+            document.addSubview(media)
+            window.contentView?.addSubview(scroll)
+            NSApplication.shared.unhide(nil)
+            NSApplication.shared.activate()
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            defer { window.close() }
+            for _ in 0..<50 {
+                if NSApp.isActive, window.occlusionState.contains(.visible) { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try XCTSkipUnless(
+                NSApp.isActive && window.occlusionState.contains(.visible),
+                "Sticker lifecycle tests require an active, visible AppKit window")
+            window.contentView?.layoutSubtreeIfNeeded()
+        #else
             let scene = try XCTUnwrap(
                 UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
             let previous = scene.windows.first(where: \.isKeyWindow)
@@ -286,53 +338,87 @@ final class MediaHostingTests: XCTestCase {
             let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 320))
             scroll.contentSize = CGSize(width: 320, height: 1800)
             controller.view.addSubview(scroll)
-            let surface = StickerMediaSurfaceView(
-                frame: CGRect(x: 20, y: 1200, width: 72, height: 72))
-            scroll.addSubview(surface)
-            surface.configure(
-                media: .init(
-                    id: "scrolling-sticker", url: fixture.url.absoluteString,
-                    contentType: "image/png", size: Int64(data.count), width: 16, height: 16),
-                emoji: "", displayScale: 1, mediaContext: context)
-            surface.setVisible(true)
-            surface.layoutIfNeeded()
-            XCTAssertEqual(fixture.requestCount, 0)
+            scroll.addSubview(media)
+            window.layoutIfNeeded()
+        #endif
+        defer { media.clear() }
+        func findSurface(in view: StickerNativeView) -> StickerMediaSurfaceView? {
+            (view as? StickerMediaSurfaceView)
+                ?? view.subviews.compactMap { findSurface(in: $0) }.first
+        }
+        let surface = try XCTUnwrap(findSurface(in: media))
+        let renderer = try XCTUnwrap(
+            surface.subviews.compactMap { $0 as? TimelineImageView }.first)
+        media.setVisible(true)
+        #if os(macOS)
+            media.layoutSubtreeIfNeeded()
+        #else
+            media.layoutIfNeeded()
+        #endif
+        XCTAssertEqual(fixture.requestCount, 0)
+        context.setNetworkAuthorized(false)
 
-            // No configure/setVisible/layout call after scrolling: ancestor movement
-            // must wake the cell which appeared while still outside the viewport.
+        // The native tile was configured outside the viewport, unlike a picker's
+        // SwiftUI onAppear. Ancestor scrolling must wake the same sticker without
+        // another bind, setVisible, or layout call from the row.
+        #if os(macOS)
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: 1160))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        #else
             scroll.setContentOffset(CGPoint(x: 0, y: 1160), animated: false)
-            await fulfillment(of: [requested], timeout: 2)
-            let renderer = try XCTUnwrap(
-                surface.subviews.compactMap { $0 as? TimelineImageView }.first)
+        #endif
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(fixture.requestCount, 0, "Visibility must not bypass account authorization")
+        context.setNetworkAuthorized(true)
+        await fulfillment(of: [requested], timeout: 2)
+        #if os(macOS)
+            let spinner = try XCTUnwrap(
+                renderer.subviews.compactMap { $0 as? NSProgressIndicator }.first)
+        #else
             let spinner = try XCTUnwrap(
                 renderer.subviews.compactMap { $0 as? UIActivityIndicatorView }.first)
-            XCTAssertTrue(
-                spinner.isAnimating,
-                "A visible pending sticker must not be blank without loading chrome")
-            let available = expectation(
-                description: "The visible sticker draws its downloaded pixels")
-            renderer.onImageAvailabilityChanged = { if $0 { available.fulfill() } }
-            fixture.resume()
-            await fulfillment(of: [available], timeout: 2)
+        #endif
+        XCTAssertFalse(
+            spinner.isHidden,
+            "A visible pending sticker must not be blank without loading chrome")
+        let available = expectation(description: "The visible sticker draws its downloaded pixels")
+        renderer.onImageAvailabilityChanged = { if $0 { available.fulfill() } }
+        fixture.resume()
+        await fulfillment(of: [available], timeout: 2)
+        XCTAssertEqual(fixture.requestCount, 1)
+        #if os(macOS)
+            renderer.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(
+                renderer.bitmapImageRepForCachingDisplay(in: renderer.bounds))
+            renderer.cacheDisplay(in: renderer.bounds, to: bitmap)
+            let pixels = try XCTUnwrap(bitmap.cgImage)
+            let attachment = XCTAttachment(
+                data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png")
+        #else
             renderer.layoutIfNeeded()
             renderer.layer.displayIfNeeded()
             let image = UIGraphicsImageRenderer(bounds: renderer.bounds).image {
                 renderer.layer.render(in: $0.cgContext)
             }
             let pixels = try XCTUnwrap(image.cgImage)
-            var rgba = [UInt8](repeating: 0, count: 4)
-            try rgba.withUnsafeMutableBytes { buffer in
-                let bitmap = try XCTUnwrap(
-                    CGContext(
-                        data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
-                        bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
-                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-                bitmap.draw(pixels, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-            }
-            XCTAssertGreaterThan(rgba[0], 220)
-            XCTAssertLessThan(rgba[1], 30)
-            XCTAssertGreaterThan(rgba[3], 220)
-            XCTAssertFalse(spinner.isAnimating)
+            let attachment = XCTAttachment(image: image)
+        #endif
+        var rgba = [UInt8](repeating: 0, count: 4)
+        try rgba.withUnsafeMutableBytes { buffer in
+            let bitmap = try XCTUnwrap(
+                CGContext(
+                    data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                    bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            bitmap.draw(pixels, in: CGRect(x: 0, y: 0, width: 1, height: 1))
         }
-    #endif
+        XCTAssertGreaterThan(rgba[0], 220)
+        XCTAssertLessThan(rgba[1], 30)
+        XCTAssertGreaterThan(rgba[3], 220)
+        XCTAssertTrue(spinner.isHidden)
+        attachment.name = "Native sticker loaded without opening the picker"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
 }

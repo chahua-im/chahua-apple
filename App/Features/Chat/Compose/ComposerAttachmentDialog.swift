@@ -307,7 +307,7 @@ struct ComposerAttachmentDialog: View {
                 onPasteMedia: canInteract ? { _ = importDrop($0) } : nil
             )
             .overlay(alignment: .topLeading) {
-                if (input.editorText ?? text).isEmpty {
+                if !input.isComposing && (input.editorText ?? text).isEmpty {
                     Text("Add a caption…")
                         .foregroundStyle(.tertiary)
                         .allowsHitTesting(false)

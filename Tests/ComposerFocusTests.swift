@@ -1083,6 +1083,54 @@ final class ComposerFocusTests: XCTestCase {
         }
     #endif
 
+    func testEmptyInputsKeepPreeditLocalAndRestoreEmptyStateAfterCancellation() async throws {
+        for caption in [false, true] {
+            let h = try await mount(text: "", caption: caption)
+            func capture(_ stage: String) throws {
+                #if os(macOS)
+                    let surface = h.host.view
+                    surface.layoutSubtreeIfNeeded()
+                    let bitmap = try XCTUnwrap(
+                        surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
+                    surface.cacheDisplay(in: surface.bounds, to: bitmap)
+                    let attachment = XCTAttachment(
+                        data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                        uniformTypeIdentifier: "public.png")
+                #else
+                    h.window.layoutIfNeeded()
+                    let attachment = XCTAttachment(
+                        image: UIGraphicsImageRenderer(bounds: h.window.bounds).image { _ in
+                            h.window.drawHierarchy(in: h.window.bounds, afterScreenUpdates: true)
+                        })
+                #endif
+                attachment.name = "\(caption ? "Caption" : "Message") placeholder \(stage)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            try capture("empty")
+            try h.mark("ni")
+            try await waitUntil { h.state.composing }
+            XCTAssertTrue(h.state.composing)
+            XCTAssertEqual(h.state.text, "")
+            XCTAssertEqual(h.state.submits, 0)
+            try capture("composing")
+            try h.insertIntoFocusedEditor("")
+            try await waitUntil { !h.state.composing }
+            XCTAssertFalse(h.state.composing)
+            XCTAssertEqual(h.state.text, "")
+            try capture("cancelled")
+            try h.mark("ni")
+            try await waitUntil { h.state.composing }
+            try h.insertIntoFocusedEditor("你")
+            try await waitUntil { h.state.text == "你" }
+            XCTAssertEqual(h.state.text, "你")
+            XCTAssertFalse(h.state.composing)
+            XCTAssertEqual(h.state.submits, 0)
+            try capture("committed")
+            await h.close()
+        }
+    }
+
     func testMarkedTextStaysLocalUntilCommitted() async throws {
         let h = try await mount(text: "prefix ")
         try h.selectEnd()
