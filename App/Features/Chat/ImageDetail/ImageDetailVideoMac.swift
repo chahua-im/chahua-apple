@@ -155,7 +155,7 @@
             loopSeekID = id
             player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) {
                 [weak self, weak player] _ in
-                Task { @MainActor in
+                Task { @MainActor [weak self, weak player] in
                     guard let self, self.player === player, self.loopSeekID == id else { return }
                     self.loopSeekID = nil
                 }

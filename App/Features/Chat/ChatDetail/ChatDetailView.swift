@@ -18,6 +18,7 @@ struct ChatDetailView: View {
     @ObservedObject private var reactions: MessageReactionController
     @ObservedObject private var pins: ChatPinController
     @ObservedObject private var savedMessages: SavedMessageController
+    @ObservedObject private var stickers: StickerLibrary
     @ObservedObject private var drafts: ChatDraftStore
     @ObservedObject private var outgoingQueue: OutgoingMessageQueue
     @State private var interactionContext: MessageInteractionContext
@@ -74,9 +75,15 @@ struct ChatDetailView: View {
     @State private var infoChatTarget: ChatListItem?
     @State private var presentedFile: AttachmentResponse?
     @State private var pinToUnpin: PinResponse?
+    @State private var messageToPin: MessageResponse?
     @State private var messageToDelete: MessageResponse?
     @State private var deleteError = false
     @State private var stickerToView: StickerSelection?
+    @State private var messageToMakeSticker: MessageStickerSelection?
+    @State private var stickerActionError: String?
+    @State private var messageActionFeedback: String?
+    @State private var stickerFavoriteTasks: [String: Task<Void, Never>] = [:]
+    @State private var stickerFavoriteTaskIDs: [String: UUID] = [:]
     @State private var reactionDetailsMessage: ReactionDetailsSelection?
     @State private var forwardRequest: ForwardSelection?
     @State private var recordRequest: RecordSelection?
@@ -126,6 +133,11 @@ struct ChatDetailView: View {
         let id: String
     }
 
+    struct MessageStickerSelection: Identifiable {
+        let id = UUID()
+        let message: MessageResponse
+    }
+
     struct ReactionDetailsSelection: Identifiable {
         let chatID: String
         let id: MessageID
@@ -152,6 +164,7 @@ struct ChatDetailView: View {
         self.reactions = store.reactions
         self.pins = store.pins
         self.savedMessages = store.savedMessages
+        self.stickers = store.stickers
         self.drafts = store.drafts
         self.outgoingQueue = store.outgoingQueue
         _interactionContext = State(
@@ -340,9 +353,20 @@ struct ChatDetailView: View {
                     store: store, currentUserID: model.currentUserID, pins: pins,
                     canManagePins: { canManagePins }, showsPinnedMessages: $showsPinnedMessages,
                     stickerToView: $stickerToView, reactionDetailsMessage: $reactionDetailsMessage,
-                    pinToUnpin: $pinToUnpin, chatID: chat.id, onJumpToPin: jumpToPinnedMessage,
-                    onOpenThread: onOpenThread)
+                    pinToUnpin: $pinToUnpin, messageToPin: $messageToPin,
+                    feedback: $messageActionFeedback, chatID: chat.id,
+                    onJumpToPin: jumpToPinnedMessage, onOpenThread: onOpenThread,
+                    onPin: pinMessage)
             )
+            .modifier(
+                ChatDetailStickerPresentation(
+                    library: stickers, messageToMakeSticker: $messageToMakeSticker,
+                    errorMessage: $stickerActionError,
+                    canUseNetworkActions: currentInteractionContext.canUseNetworkActions,
+                    onAdded: { messageActionFeedback = AppLanguage.localized("Sticker added") },
+                    sourceIsAvailable: canMakeMessageSticker)
+            )
+            .modifier(MessageActionFeedbackPresentation(feedback: $messageActionFeedback))
             .onChange(of: scenePhase) { _, phase in
                 model.setReadTrackingActive(isTimelineVisible && phase == .active)
             }
@@ -418,6 +442,7 @@ struct ChatDetailView: View {
                 if pendingEditSession != nil || editExitCoordinator == nil { cancelEditing() }
                 selectionDeleteTask?.cancel()
                 systemTargetTask?.cancel()
+                cancelStickerActions()
                 systemTargetTask = nil
                 selectionDeleteTask = nil
                 forwardRequest = nil
@@ -473,7 +498,8 @@ struct ChatDetailView: View {
                 ChatDetailDeletionPresentation(
                     store: store, currentUserID: model.currentUserID,
                     messageToDelete: $messageToDelete, editingMessage: $editingMessage,
-                    deleteError: $deleteError, canDelete: canDeleteMessage,
+                    deleteError: $deleteError, feedback: $messageActionFeedback,
+                    isCurrentSession: { isCurrentSession }, canDelete: canDeleteMessage,
                     groupChatWriteRestricted: {
                         currentInteractionContext.groupChatWriteRestricted
                     },
@@ -745,7 +771,7 @@ struct ChatDetailView: View {
             if horizontalSizeClass == .compact && showsPinnedMessages { return true }
         #endif
         return hasDescendantVoiceCover || showsThreadInfo || presentedFile != nil
-            || forwardRequest != nil || stickerToView != nil
+            || stickerToView != nil || messageToMakeSticker != nil
     }
 
     private func conversationBody(actions interactiveActions: TimelineBubbleActions) -> some View {
@@ -843,7 +869,7 @@ struct ChatDetailView: View {
         let allowsCaption = session?.attachments.contains(where: \.isFile) != true
         var composer = MessageComposerView(
             text: composerText, attachmentState: composerAttachments, maxHeight: maxHeight,
-            isEnabled: canUseComposer && !(session != nil && isUpdatingMessage),
+            isEnabled: canUseComposer && !isUpdatingMessage,
             canSend: canSubmitComposer,
             onSubmit: { text in
                 guard isCurrentSession, composerEditOwner == owner else { return false }
@@ -1124,6 +1150,7 @@ struct ChatDetailView: View {
         forwardRequest = nil
         messageToDelete = nil
         pinToUnpin = nil
+        messageToPin = nil
         recordRequest = nil
         systemMessageTarget = nil
         showsThreadInfo = false
@@ -1133,6 +1160,7 @@ struct ChatDetailView: View {
         infoChatTarget = nil
         presentedFile = nil
         stickerToView = nil
+        cancelStickerActions()
         reactionDetailsMessage = nil
     }
 
@@ -1140,6 +1168,10 @@ struct ChatDetailView: View {
         var actions = TimelineBubbleActions()
         let context = currentInteractionContext
         actions.interactionContext = context
+        actions.didCopyMessage = {
+            guard isCurrentSession else { return }
+            messageActionFeedback = AppLanguage.localized("Copied")
+        }
         actions.openMention = { openUserProfile($0) }
         actions.openSystemMessage = openSystemMessage
         actions.savedMessageIDs = savedMessages.savedIDs(chatID: chat.id)
@@ -1152,7 +1184,16 @@ struct ChatDetailView: View {
                 savedMessageToRetry = message
                 Task {
                     guard isCurrentSession, store.canFetchHistory else { return }
+                    let wasSaved = savedMessages.isSaved(
+                        chatID: message.chatId, messageID: message.id)
                     await savedMessages.toggle(message)
+                    guard isCurrentSession, !Task.isCancelled,
+                        savedMessages.isSaved(chatID: message.chatId, messageID: message.id)
+                            != wasSaved
+                    else { return }
+                    messageActionFeedback =
+                        wasSaved
+                        ? AppLanguage.localized("Unsaved") : AppLanguage.localized("Saved")
                 }
             }
         }
@@ -1178,6 +1219,20 @@ struct ChatDetailView: View {
             }
         }
         actions.openSticker = { stickerToView = StickerSelection(id: $0) }
+        actions.favoriteStickerIDs = Set(stickers.favorites.map(\.id))
+        actions.pendingStickerIDs = stickers.pendingMutationIDs
+        actions.isStickerFavorite = { message in
+            message.sticker.map { stickers.isFavorite($0) } ?? false
+        }
+        if context.canUseNetworkActions {
+            actions.addMessageToStickerPack = { message in
+                guard canMakeMessageSticker(message) else { return }
+                messageToMakeSticker = MessageStickerSelection(message: message)
+            }
+            if stickers.hasLoadedLibrary, !stickers.isLoading {
+                actions.toggleStickerFavorite = toggleMessageStickerFavorite
+            }
+        }
         if context.canUseNetworkActions {
             actions.openReactionDetails = {
                 guard isCurrentSession, store.canFetchHistory else { return }
@@ -1278,6 +1333,63 @@ struct ChatDetailView: View {
         return actions
     }
 
+    private func canMakeMessageSticker(_ message: MessageResponse) -> Bool {
+        guard isCurrentSession, currentInteractionContext.canUseNetworkActions,
+            message.chatId == chat.id, message.canAddToStickerPack,
+            !model.knownDeletedMessageIDs.contains(message.id),
+            store.historyCache?.accessRevoked(chat.id) != true
+        else { return false }
+        for case .message(let row) in model.rows {
+            guard let current = row.entry.remoteMessage, current.id == message.id else { continue }
+            return current.canAddToStickerPack && current.attachments == message.attachments
+                && current.message == message.message
+        }
+        return false
+    }
+
+    private func toggleMessageStickerFavorite(_ message: MessageResponse) {
+        guard isCurrentSession, currentInteractionContext.canUseNetworkActions,
+            message.chatId == chat.id, message.messageType == .sticker, !message.isDeleted,
+            !model.knownDeletedMessageIDs.contains(message.id),
+            let sticker = message.sticker, stickerFavoriteTasks[sticker.id] == nil,
+            !stickers.pendingMutationIDs.contains(sticker.id), !stickers.isLoading,
+            stickers.hasLoadedLibrary
+        else { return }
+        let requestID = UUID()
+        stickerFavoriteTaskIDs[sticker.id] = requestID
+        stickerFavoriteTasks[sticker.id] = Task {
+            defer {
+                if stickerFavoriteTaskIDs[sticker.id] == requestID {
+                    stickerFavoriteTaskIDs.removeValue(forKey: sticker.id)
+                    stickerFavoriteTasks.removeValue(forKey: sticker.id)
+                }
+            }
+            guard isCurrentSession, currentInteractionContext.canUseNetworkActions,
+                !model.knownDeletedMessageIDs.contains(message.id)
+            else { return }
+            guard await stickers.toggleFavorite(sticker) else {
+                guard !Task.isCancelled, isCurrentSession else { return }
+                stickerActionError = stickers.error
+                stickers.error = nil
+                return
+            }
+            guard !Task.isCancelled, isCurrentSession else { return }
+            messageActionFeedback =
+                stickers.isFavorite(sticker)
+                ? AppLanguage.localized("Sticker added to favorites.")
+                : AppLanguage.localized("Sticker removed from favorites.")
+        }
+    }
+
+    private func cancelStickerActions() {
+        for task in stickerFavoriteTasks.values { task.cancel() }
+        stickerFavoriteTasks.removeAll()
+        stickerFavoriteTaskIDs.removeAll()
+        messageToMakeSticker = nil
+        messageActionFeedback = nil
+        stickerActionError = nil
+    }
+
     private func canDeleteMessage(_ message: MessageResponse) -> Bool {
         let context = currentInteractionContext
         return context.canWriteContent && !store.deletingMessageIDs.contains(message.id)
@@ -1309,16 +1421,27 @@ struct ChatDetailView: View {
 
     private func requestPinChange(_ message: MessageResponse) {
         guard canManagePins,
-            !message.isDeleted,
             !pins.pendingMessageIDs.contains(message.id)
         else { return }
         if let pin = chatPins.first(where: { $0.message.id == message.id }) {
             pinToUnpin = pin
         } else {
-            Task {
-                guard canManagePins else { return }
-                await pins.pin(message)
-            }
+            guard !message.isDeleted else { return }
+            messageToPin = message
+        }
+    }
+
+    private func pinMessage(_ message: MessageResponse) {
+        Task {
+            guard canManagePins, !message.isDeleted,
+                !model.knownDeletedMessageIDs.contains(message.id),
+                !pins.pendingMessageIDs.contains(message.id)
+            else { return }
+            await pins.pin(message)
+            guard isCurrentSession, !Task.isCancelled,
+                chatPins.contains(where: { $0.message.id == message.id })
+            else { return }
+            messageActionFeedback = AppLanguage.localized("Pinned")
         }
     }
 
@@ -1651,23 +1774,21 @@ struct ChatDetailView: View {
         }
         guard isEditable(message), !isUpdatingMessage else { return false }
         isUpdatingMessage = true
-        let submittedText = text
         let submittedEditIdentity = serverEditIdentity
-        let submittedMetadata = composerMetadata(for: submittedText)
+        defer {
+            if serverEditIdentity == submittedEditIdentity { isUpdatingMessage = false }
+        }
+        let submittedMetadata = composerMetadata(for: text)
         let didUpdate = await store.updateMessage(
-            message, text: submittedText, metadata: submittedMetadata)
-        guard isCurrentSession, !Task.isCancelled else { return false }
+            message, text: text, metadata: submittedMetadata)
+        guard isCurrentSession else { return false }
         guard editingMessage?.id == message.id, pendingEditSession == nil,
             submittedEditIdentity == serverEditIdentity
         else { return didUpdate }
-        isUpdatingMessage = false
+        // Save owns this editor until the server replies. A confirmed update ends
+        // that edit even if native input settlement or task cancellation arrives late.
         if didUpdate {
-            if editText == submittedText && composerMetadata(for: editText) == submittedMetadata {
-                cancelEditing()
-            } else {
-                editingMessage = message.replacingMessageText(
-                    submittedText.trimmingCharacters(in: .whitespacesAndNewlines))
-            }
+            cancelEditing()
         } else {
             editError =
                 store.messageUpdateError

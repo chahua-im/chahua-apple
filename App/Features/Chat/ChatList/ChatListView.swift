@@ -66,6 +66,12 @@ struct ChatListView: View {
         let currentUserID: Int32
     }
 
+    private struct SavedPageRequest: Equatable {
+        let activity: ActivityID
+        let chatCursor: CachedListPage.Cursor?
+        let threadCursor: CachedListPage.Cursor?
+    }
+
     private struct ConsumerID: Equatable {
         let conversations: [ConversationRef]
         let active: Bool
@@ -151,6 +157,31 @@ struct ChatListView: View {
             || (includesThreads
                 && store.state.savedListHasMore.contains(
                     archivedMode ? .archivedThreads : .activeThreads))
+    }
+    private var savedPageRequest: SavedPageRequest {
+        SavedPageRequest(
+            activity: activityID,
+            chatCursor: scope.includesChats
+                ? store.state.savedListCursors[archivedMode ? .archivedChats : .activeChats] : nil,
+            threadCursor: includesThreads
+                ? store.state.savedListCursors[archivedMode ? .archivedThreads : .activeThreads]
+                : nil)
+    }
+
+    private var savedPagingFailed: Bool {
+        (scope.includesChats
+            && store.state.savedListPagePhases[archivedMode ? .archivedChats : .activeChats]
+                == .failed)
+            || (includesThreads
+                && store.state.savedListPagePhases[archivedMode ? .archivedThreads : .activeThreads]
+                    == .failed)
+    }
+
+    private func loadMoreSavedConversations(retry: Bool = false) async {
+        guard isActive else { return }
+        await store.loadMoreSavedConversations(
+            chats: scope.includesChats, threads: includesThreads,
+            archived: archivedMode, retry: retry)
     }
 
     var body: some View {
@@ -316,13 +347,20 @@ struct ChatListView: View {
                 .listSectionSeparator(.hidden, edges: .top)
             #endif
             if hasMoreSavedConversations {
-                Button("Show more saved conversations") {
-                    Task {
-                        await store.loadMoreSavedConversations(
-                            chats: scope.includesChats, threads: includesThreads,
-                            archived: archivedMode)
+                VStack(spacing: 8) {
+                    if savedPagingFailed {
+                        Text("Could not load more conversations")
+                            .foregroundStyle(.secondary)
+                        Button("Retry") {
+                            Task { await loadMoreSavedConversations(retry: true) }
+                        }
+                    } else {
+                        ProgressView("Loading conversations…")
+                            .controlSize(.small)
                     }
                 }
+                .padding(.vertical, 12)
+                .task(id: savedPageRequest) { await loadMoreSavedConversations() }
                 #if os(iOS)
                     .background(ConversationListScrollMarker(scope: scrollScope))
                 #endif

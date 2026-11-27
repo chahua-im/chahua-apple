@@ -56,6 +56,12 @@ enum ConversationTimelineEntry: Hashable {
         }
     }
 
+    /// Clipboard presentation must never replace the stored wire text.
+    var clipboardText: String? {
+        guard presentationMessage?.isDeleted != true, let text else { return nil }
+        return MessageMentions.plainText(text, mentions: presentationMessage?.mentions ?? [])
+    }
+
     var sticker: MessageStickerResponse? {
         switch self {
         case .remote(let message): message.isDeleted ? nil : message.sticker

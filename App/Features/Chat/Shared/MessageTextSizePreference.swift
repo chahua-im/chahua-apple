@@ -39,10 +39,11 @@ enum MessageTextSizePreference {
         Option(rawValue: value) ?? .system
     }
 
-    /// Default follows accessibility sizing; an explicit choice replaces it, not multiplies it.
+    /// Use each platform's native baseline without changing stored choices.
     static func scaledSize(_ value: Int, systemSize: CGFloat, defaultSize: CGFloat) -> CGFloat {
         let selection = option(value)
-        return selection == .system ? systemSize : defaultSize * selection.factor
+        let size = selection == .system ? systemSize : defaultSize * selection.factor
+        return size
     }
 
     static func migrateLegacyValue(in defaults: UserDefaults) {

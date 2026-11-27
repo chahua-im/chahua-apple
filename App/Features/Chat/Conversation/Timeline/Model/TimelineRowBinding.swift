@@ -16,6 +16,7 @@ struct MessageInteractionSource {
     let rect: CGRect
     let presentation: TimelineRowPresentation
     let layout: TimelineRowLayout
+    var pressPoint: CGPoint? = nil
     #if os(macOS)
         /// Bubble-local coordinates, captured from the native fill or clipping path.
         let contour: CGPath
@@ -28,6 +29,12 @@ struct MessageInteractionSource {
 struct TimelineBubbleActions {
     var openMedia: ((MessageImageGallery) -> Void)?
     var openSticker: ((String) -> Void)?
+    var isStickerFavorite: ((MessageResponse) -> Bool)?
+    var toggleStickerFavorite: ((MessageResponse) -> Void)?
+    var addMessageToStickerPack: ((MessageResponse) -> Void)?
+    var favoriteStickerIDs: Set<String> = []
+    var pendingStickerIDs: Set<String> = []
+    var didCopyMessage: (() -> Void)?
     var openReply: ((MessageID) -> Void)?
     var openSystemMessage: ((MessageID) -> Void)?
     var openReactionDetails: ((MessageResponse) -> Void)?
@@ -86,6 +93,12 @@ extension TimelineBubbleActions {
     func hasSameRendering(as other: Self) -> Bool {
         (openMedia == nil) == (other.openMedia == nil)
             && (openSticker == nil) == (other.openSticker == nil)
+            && (isStickerFavorite == nil) == (other.isStickerFavorite == nil)
+            && (toggleStickerFavorite == nil) == (other.toggleStickerFavorite == nil)
+            && (addMessageToStickerPack == nil) == (other.addMessageToStickerPack == nil)
+            && favoriteStickerIDs == other.favoriteStickerIDs
+            && pendingStickerIDs == other.pendingStickerIDs
+            && (didCopyMessage == nil) == (other.didCopyMessage == nil)
             && (openReply == nil) == (other.openReply == nil)
             && (openSystemMessage == nil) == (other.openSystemMessage == nil)
             && (openReactionDetails == nil) == (other.openReactionDetails == nil)

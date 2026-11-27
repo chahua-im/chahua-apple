@@ -11,6 +11,7 @@ struct MessageInteractionContext: Equatable {
     var isUpdatingPin = false
     var isSaved = false
     var canSave = false
+    var isFavoriteSticker = false
     var isReadOnly = false
     var speakingMode: SpeakingMode?
     var hasExistingThread = false
@@ -77,14 +78,14 @@ enum SpeakingWriteError: LocalizedError {
 
 enum MessageMenuAction: String, CaseIterable, Identifiable {
     case copy, copyLink, reply, thread, pin, unpin, edit, delete, select, forward, save, favorite,
-        reactionDetails
+        toSticker, reactionDetails
 
     var id: Self { self }
 }
 
-/// Hidden means inapplicable; unimplemented means relevant but intentionally disabled.
+/// Hidden actions do not apply. Disabled actions stay visible without granting permission.
 enum MessageActionAvailability: Equatable {
-    case hidden, unimplemented, enabled
+    case hidden, disabled, enabled
 }
 
 struct MessageActionPolicy {
@@ -97,6 +98,7 @@ struct MessageActionPolicy {
     let hasReactions: Bool
     let isForwarded: Bool
     let isThreadReply: Bool
+    let hasSingleImageWithoutText: Bool
     let context: MessageInteractionContext
 
     init(
@@ -109,6 +111,7 @@ struct MessageActionPolicy {
         hasReactions: Bool = false,
         isForwarded: Bool = false,
         isThreadReply: Bool = false,
+        hasSingleImageWithoutText: Bool = false,
         context: MessageInteractionContext = .init()
     ) {
         self.messageType = messageType
@@ -121,6 +124,7 @@ struct MessageActionPolicy {
         self.context = context
         self.isForwarded = isForwarded
         self.isThreadReply = isThreadReply
+        self.hasSingleImageWithoutText = hasSingleImageWithoutText
     }
 
     init(row: TimelineMessageRow, context: MessageInteractionContext) {
@@ -134,13 +138,14 @@ struct MessageActionPolicy {
             hasReactions: row.entry.remoteMessage?.reactions.contains { $0.count > 0 } == true,
             isForwarded: row.entry.presentationMessage?.forwardedFrom != nil,
             isThreadReply: row.entry.remoteMessage?.replyRootId != nil,
+            hasSingleImageWithoutText: row.entry.remoteMessage?.canAddToStickerPack == true,
             context: context
         )
     }
 
     var actions: [MessageMenuAction] {
         let order: [MessageMenuAction] = [
-            .reply, .thread, .copy, .forward, .edit, .favorite, .save, .select,
+            .reply, .thread, .copy, .forward, .edit, .save, .favorite, .toSticker, .select,
             .reactionDetails, .copyLink, context.isPinned ? .unpin : .pin, .delete,
         ]
         return order.filter { availability(of: $0) != .hidden }
@@ -162,7 +167,9 @@ struct MessageActionPolicy {
         }
         if !context.canUseNetworkActions {
             switch action {
-            case .thread, .pin, .unpin, .edit, .delete, .save, .reactionDetails: return .hidden
+            case .thread, .pin, .unpin, .edit, .delete, .save, .favorite, .toSticker,
+                .reactionDetails:
+                return .hidden
             default: break
             }
         }
@@ -177,24 +184,25 @@ struct MessageActionPolicy {
             case .reply: return context.canStageDraft && !isPending ? .enabled : .hidden
             case .copyLink: return !context.isDM && !isPending ? .enabled : .hidden
             case .reactionDetails: return hasReactions && !isPending ? .enabled : .hidden
+            // A remaining pin can be removed without restoring recalled content.
+            case .unpin: break
             default: return .hidden
             }
         }
         if isPending || messageType == .system {
             return action == .copy && hasCopyableText ? .enabled : .hidden
         }
-        let applicable: Bool
         switch action {
         case .copy:
             return hasCopyableText ? .enabled : .hidden
         case .copyLink:
             return context.isDM ? .hidden : .enabled
         case .reply:
-            return context.canStageDraft ? .enabled : .hidden
+            return context.canStageDraft ? .enabled : .disabled
         case .thread:
-            return context.canCreateThread && messageType == .text && !context.isThreadView
-                && !hasThreadInfo
-                ? .enabled : .hidden
+            guard messageType == .text && !context.isThreadView else { return .hidden }
+            // Opening an existing thread is navigation, not permission to create one.
+            return hasThreadInfo || context.canCreateThread ? .enabled : .disabled
         case .pin:
             return context.canWrite && (context.isDM || context.isAdmin)
                 && !context.isThreadView && !context.isPinned
@@ -205,7 +213,7 @@ struct MessageActionPolicy {
                 && !context.isUpdatingPin ? .enabled : .hidden
         case .edit:
             return context.canSendOnline(isThreadReply: isThreadReply) && isOwn
-                && messageType == .text && hasCopyableText
+                && messageType == .text
                 && !isForwarded
                 ? .enabled : .hidden
         case .delete:
@@ -215,13 +223,15 @@ struct MessageActionPolicy {
         case .forward:
             return .enabled
         case .favorite:
-            applicable = messageType == .sticker
+            return messageType == .sticker ? .enabled : .hidden
         case .save:
             return messageType != .sticker && context.canSave ? .enabled : .hidden
+        case .toSticker:
+            return messageType == .text && hasSingleImageWithoutText && !isForwarded
+                ? .enabled : .hidden
         case .reactionDetails:
             return hasReactions ? .enabled : .hidden
         }
-        return applicable ? .unimplemented : .hidden
     }
 
     private var hasCopyableText: Bool {

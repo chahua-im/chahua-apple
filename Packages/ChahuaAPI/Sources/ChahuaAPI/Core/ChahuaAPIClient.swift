@@ -252,6 +252,12 @@ public protocol ChahuaAPIClient: SocialAPIClient, GroupAPIClient {
         id: String, upload: StickerUpload, emoji: String, name: String?, description: String?
     ) async throws -> MessageStickerResponse
 
+    /// Copies and processes an authorized source image using `stickers.createFromMessage`.
+    /// Not idempotent: never automatically retry an uncertain response.
+    func createStickerFromMessage(
+        packID: String, chatID: String, messageID: MessageID, emoji: String, name: String?
+    ) async throws -> MessageStickerResponse
+
     /// Removes a sticker from an owned pack with `DELETE /stickers/packs/{id}/stickers/{stickerID}`.
     func removeStickerFromPack(id: String, stickerID: String) async throws
 

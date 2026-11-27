@@ -103,11 +103,49 @@ public actor ChahuaClient: ChahuaAPIClient, SessionAuthenticating, RealtimeConne
         try checkSession(generation)
         guard let token, !token.isEmpty else { throw APIError.invalidToken }
         let socket = session.webSocketTask(with: try webSocketRequest())
-        let previews = try await DraftLinkPreviewRPC.fetch(
+        let previews: [MessageLinkPreview] = try await SessionRPC.call(
             socket: socket, token: token, appVersion: configuration.appVersion,
-            chatID: chatID, urls: urls, timeout: configuration.requestTimeout)
+            method: "messages.previewLinks", params: PreviewLinksParams(chatId: chatID, urls: urls),
+            timeout: configuration.requestTimeout)
         try checkSession(generation)
         return previews
+    }
+
+    public func createStickerFromMessage(
+        packID: String, chatID: String, messageID: MessageID, emoji: String, name: String?
+    ) async throws -> MessageStickerResponse {
+        let generation = sessionGeneration
+        guard sessionAuthorized else { throw CancellationError() }
+        if let refreshTask { _ = try await refreshTask.value }
+        try checkSession(generation)
+        guard let token, !token.isEmpty else { throw APIError.invalidToken }
+        let socket = session.webSocketTask(with: try webSocketRequest())
+        do {
+            let sticker: MessageStickerResponse = try await SessionRPC.call(
+                socket: socket, token: token, appVersion: configuration.appVersion,
+                method: "stickers.createFromMessage",
+                params: CreateMessageStickerParams(
+                    packId: packID, chatId: chatID, messageId: messageID, emoji: emoji, name: name),
+                timeout: configuration.requestTimeout)
+            try checkSession(generation)
+            return sticker
+        } catch {
+            try checkSession(generation)
+            throw error
+        }
+    }
+
+    private struct PreviewLinksParams: Encodable, Sendable {
+        let chatId: String
+        let urls: [String]
+    }
+
+    private struct CreateMessageStickerParams: Encodable, Sendable {
+        let packId: String
+        let chatId: String
+        let messageId: MessageID
+        let emoji: String
+        let name: String?
     }
 
     private func webSocketRequest() throws -> URLRequest {

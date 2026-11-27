@@ -59,7 +59,9 @@
         }
 
         @discardableResult
-        static func openContextMenu(for rowView: TimelineRowView) -> Bool {
+        static func openContextMenu(for rowView: TimelineRowView, pressPoint: CGPoint? = nil)
+            -> Bool
+        {
             guard let binding = rowView.binding,
                 !binding.context.isInteractionPreview,
                 case .message(let row) = binding.presentation.row,
@@ -76,7 +78,7 @@
                 MessageInteractionSource(
                     rect: topOrigin(rowView.convert(bubble, to: content), in: content),
                     presentation: binding.presentation, layout: binding.layout,
-                    contour: contour.normalized(using: .winding)))
+                    pressPoint: pressPoint, contour: contour.normalized(using: .winding)))
             return true
         }
 
@@ -152,18 +154,17 @@
                 let bubble = binding.layout.frames[.bubble],
                 bubble.contains(cell.rowView.convert(event.locationInWindow, from: nil))
             else { return event }
-            if !binding.context.isInteractionPreview, binding.presentation.audioURL != nil,
-                let audio = binding.layout.frames[.audio],
-                binding.presentation.voiceMetrics.playbackButtonContains(
-                    cell.rowView.convert(event.locationInWindow, from: nil), in: audio,
-                    layoutDirection: binding.presentation.environment.layoutDirection)
-            {
-                return event
-            }
             if let previous = selectedTextView, !previous.isDescendant(of: cell) {
                 clearSelectedText()
             }
-            guard Self.openContextMenu(for: cell.rowView) else { return event }
+            let contentPoint = content.convert(event.locationInWindow, from: nil)
+            let pressPoint =
+                content.isFlipped
+                ? contentPoint
+                : CGPoint(x: contentPoint.x, y: content.bounds.maxY - contentPoint.y)
+            guard Self.openContextMenu(for: cell.rowView, pressPoint: pressPoint) else {
+                return event
+            }
             return nil
         }
 

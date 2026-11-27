@@ -99,7 +99,6 @@
                 self.controller = controller
                 feedback = presentation.source.pressFeedback
                 controller.mount(
-                    scale: reduceMotion ? 1 : feedback?.scale ?? 1,
                     opacity: feedback?.opacity ?? (reduceMotion ? 0 : 1))
                 feedback?.handOff()
                 controller.becomeFirstResponder()
@@ -111,9 +110,11 @@
                 controller.leave { [weak self, weak controller] in
                     guard let self, self.controller === controller else { return }
                     let window = self.window
+                    let action = controller?.takeDeferredAction()
                     self.remove()
                     UIAccessibility.post(notification: .screenChanged, argument: nil)
                     if self.presentation != nil { self.attach(to: window) }
+                    action?()
                 }
             }
             func remove() {
@@ -150,9 +151,9 @@
         private let previewViewport = UIView()
         private let previewClip = UIView()
         private let preview = TimelineRowView(frame: .zero)
-        private let reactions = MessageInteractionSurface(radius: 26)
+        private let reactions = MessageInteractionSurface(radius: MessageMenuLayout.radius)
         private let reactionStack = UIStackView()
-        private let actionsScroll = UIScrollView()
+        private let actionsPanel = UIView()
         private let actionStack = UIStackView()
         private let placeholder = UIView()
         private var emojiPicker: NativeReactionEmojiKeyboard?
@@ -167,8 +168,11 @@
         private var initialScale: CGFloat = 1
         private var actionHeight: CGFloat = 0
         private var animation: UIViewPropertyAnimator?
-        private var settle: DispatchWorkItem?
         private var preferenceObserver: NSObjectProtocol?
+        private var menuPage = 0
+        private var keyboardButtons: [UIButton] = []
+        private var keyboardIndex: Int?
+        private var deferredAction: (() -> Void)?
 
         init(presentation: MessageInteractionPresentation, reduceMotion: Bool) {
             self.presentation = presentation
@@ -184,12 +188,12 @@
             view.tintColor = UIColor(ChahuaTheme.accent)
             view.addSubview(backdrop)
             backdrop.contentView.addSubview(dim)
-            dim.backgroundColor = UIColor.black.withAlphaComponent(0.24)
+            dim.backgroundColor = UIColor(
+                red: 34 / 255, green: 36 / 255, blue: 40 / 255, alpha: 0.25)
             dim.addTarget(self, action: #selector(close), for: .touchUpInside)
             dim.isAccessibilityElement = true
             dim.accessibilityTraits = .button
             dim.accessibilityLabel = AppLanguage.localized("Dismiss message actions")
-            previewClip.clipsToBounds = true
             previewViewport.accessibilityElementsHidden = true
             previewViewport.layer.shadowColor = UIColor.black.cgColor
             previewViewport.layer.shadowOpacity = 0.24
@@ -200,14 +204,13 @@
             previewClip.addSubview(preview)
             view.addSubview(reactions)
             reactionStack.axis = .horizontal
-            reactionStack.spacing = 2
+            reactionStack.spacing = 0
             reactionStack.distribution = .fillEqually
             reactions.content.addSubview(reactionStack)
-            view.addSubview(actionsScroll)
-            actionsScroll.showsVerticalScrollIndicator = false
+            view.addSubview(actionsPanel)
             actionStack.axis = .vertical
             actionStack.spacing = 8
-            actionsScroll.addSubview(actionStack)
+            actionsPanel.addSubview(actionStack)
             view.addSubview(placeholder)
             placeholder.isHidden = true
             placeholder.accessibilityLabel = AppLanguage.localized("Choose a reaction")
@@ -256,6 +259,10 @@
             NotificationCenter.default.addObserver(
                 self, selector: #selector(keyboardChanged(_:)),
                 name: UIResponder.keyboardWillHideNotification, object: nil)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(updateTransparency),
+                name: UIAccessibility.reduceTransparencyStatusDidChangeNotification, object: nil)
+            updateTransparency()
             preferenceObserver = NotificationCenter.default.addObserver(
                 forName: UserDefaults.didChangeNotification, object: nil, queue: .main
             ) { [weak self] _ in
@@ -273,10 +280,64 @@
         }
         override var canBecomeFirstResponder: Bool { true }
         override var keyCommands: [UIKeyCommand]? {
-            [
+            let escape = UIKeyCommand(
+                input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(close))
+            guard emojiPicker == nil else { return [escape] }
+            return [
+                escape,
                 UIKeyCommand(
-                    input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(close))
+                    input: UIKeyCommand.inputLeftArrow, modifierFlags: [],
+                    action: #selector(moveKeyboardFocus(_:))),
+                UIKeyCommand(
+                    input: UIKeyCommand.inputRightArrow, modifierFlags: [],
+                    action: #selector(moveKeyboardFocus(_:))),
+                UIKeyCommand(
+                    input: UIKeyCommand.inputUpArrow, modifierFlags: [],
+                    action: #selector(moveKeyboardFocus(_:))),
+                UIKeyCommand(
+                    input: UIKeyCommand.inputDownArrow, modifierFlags: [],
+                    action: #selector(moveKeyboardFocus(_:))),
+                UIKeyCommand(
+                    input: "\t", modifierFlags: [], action: #selector(moveKeyboardFocus(_:))),
+                UIKeyCommand(
+                    input: "\t", modifierFlags: [.shift], action: #selector(moveKeyboardFocus(_:))),
+                UIKeyCommand(
+                    input: "\r", modifierFlags: [], action: #selector(activateKeyboardFocus)),
+                UIKeyCommand(
+                    input: " ", modifierFlags: [], action: #selector(activateKeyboardFocus)),
             ]
+        }
+        @objc private func moveKeyboardFocus(_ command: UIKeyCommand) {
+            guard !keyboardButtons.isEmpty else { return }
+            let backwards =
+                command.input == UIKeyCommand.inputLeftArrow
+                || command.input == UIKeyCommand.inputUpArrow
+                || command.modifierFlags.contains(.shift)
+            let step = backwards ? -1 : 1
+            var index = keyboardIndex ?? (backwards ? 0 : -1)
+            for _ in keyboardButtons.indices {
+                index = (index + step + keyboardButtons.count) % keyboardButtons.count
+                if keyboardButtons[index].isEnabled { break }
+            }
+            guard keyboardButtons[index].isEnabled else { return }
+            for button in keyboardButtons {
+                (button as? MessageInteractionButton)?.keyboardFocused = false
+            }
+            keyboardIndex = index
+            let button = keyboardButtons[index]
+            (button as? MessageInteractionButton)?.keyboardFocused = true
+            UIAccessibility.post(notification: .layoutChanged, argument: button)
+        }
+        @objc private func activateKeyboardFocus() {
+            if keyboardIndex == nil {
+                moveKeyboardFocus(
+                    UIKeyCommand(
+                        input: "\t", modifierFlags: [], action: #selector(moveKeyboardFocus(_:))))
+            }
+            guard let keyboardIndex, keyboardButtons.indices.contains(keyboardIndex),
+                keyboardButtons[keyboardIndex].isEnabled
+            else { return }
+            keyboardButtons[keyboardIndex].sendActions(for: .touchUpInside)
         }
         override func accessibilityPerformEscape() -> Bool {
             close()
@@ -319,6 +380,7 @@
         }
         private func rebuildControls() {
             guard isViewLoaded else { return }
+            keyboardButtons.removeAll(keepingCapacity: true)
             for item in reactionStack.arrangedSubviews { item.removeFromSuperview() }
             for item in actionStack.arrangedSubviews { item.removeFromSuperview() }
             for item in reactionStack.subviews where item is UIActivityIndicatorView {
@@ -330,115 +392,126 @@
                 UserDefaults.standard.string(forKey: MessageReactionPreferences.recentStorageKey)
                 ?? MessageReactionPreferences.defaultRecentStorage
             for emoji in MessageReactionPreferences.quick(from: recent) {
-                let button = UIButton(type: .system)
+                let button = MessageInteractionButton(type: .system)
                 button.setTitle(emoji, for: .normal)
-                button.titleLabel?.font = .systemFont(ofSize: 24)
+                button.titleLabel?.font = .systemFont(ofSize: 28)
                 let selected = value.eligibility.isSelected(emoji)
-                button.backgroundColor = selected ? view.tintColor.withAlphaComponent(0.18) : .clear
-                button.layer.cornerRadius = 22
+                button.showsSelection = selected
+                button.layer.cornerRadius = 10
                 button.isEnabled = value.eligibility.canToggle(emoji)
-                button.alpha = button.isEnabled ? 1 : 0.4
+                button.alpha = button.isEnabled ? 1 : 0.5
                 button.accessibilityLabel = AppLanguage.localized(
                     selected ? "Remove reaction: \(emoji)" : "React with: \(emoji)")
                 if selected { button.accessibilityTraits.insert(.selected) }
                 button.addAction(
                     UIAction { [weak self] _ in self?.react(emoji) }, for: .touchUpInside)
                 reactionStack.addArrangedSubview(button)
+                if policy.canReact { keyboardButtons.append(button) }
             }
-            let more = UIButton(type: .system)
-            more.setImage(UIImage(systemName: "plus"), for: .normal)
-            more.tintColor = .label
-            more.setPreferredSymbolConfiguration(
-                .init(pointSize: 21, weight: .medium), forImageIn: .normal)
-            more.isEnabled = !value.isReacting && value.actions.toggleReaction != nil
-            more.alpha = more.isEnabled ? 1 : 0.4
-            more.accessibilityLabel = AppLanguage.localized("More reactions")
-            more.accessibilityIdentifier = "more-reactions"
-            more.addAction(
-                UIAction { [weak self] _ in self?.showEmojiPicker() }, for: .touchUpInside)
-            reactionStack.addArrangedSubview(more)
+            if !value.eligibility.distinctLimitReached {
+                let more = MessageInteractionButton(type: .system)
+                more.setImage(UIImage(systemName: "plus"), for: .normal)
+                more.tintColor = .secondaryLabel
+                more.layer.cornerRadius = 10
+                more.setPreferredSymbolConfiguration(
+                    .init(pointSize: 26, weight: .regular), forImageIn: .normal)
+                more.isEnabled = !value.isReacting && value.eligibility.canReact
+                more.alpha = more.isEnabled ? 1 : 0.5
+                more.accessibilityLabel = AppLanguage.localized("More reactions")
+                more.accessibilityIdentifier = "more-reactions"
+                more.addAction(
+                    UIAction { [weak self] _ in self?.showEmojiPicker() }, for: .touchUpInside)
+                reactionStack.addArrangedSubview(more)
+                if policy.canReact { keyboardButtons.append(more) }
+            } else {
+                reactionStack.addArrangedSubview(UIView())
+            }
             if value.isReacting {
                 let progress = UIActivityIndicatorView(style: .medium)
-                progress.center = CGPoint(x: 138, y: 26)
                 progress.accessibilityLabel = AppLanguage.localized("Updating reaction")
                 progress.startAnimating()
                 reactionStack.addSubview(progress)
             }
-            let menuActions = policy.actions
-            let rowHeight = max(63, UIFontMetrics(forTextStyle: .caption2).scaledValue(for: 63))
-            if !menuActions.isEmpty {
-                let surface = MessageInteractionSurface(radius: 14)
+            let page = MessageMenuPage(actions: policy.actions, page: menuPage)
+            menuPage = page.page
+            let rowHeight = MessageMenuLayout.rowHeight
+            if !page.actions.isEmpty {
+                let surface = MessageInteractionSurface(radius: MessageMenuLayout.radius)
                 let grid = UIStackView()
                 grid.axis = .vertical
                 grid.spacing = 0
                 surface.content.addSubview(grid)
                 grid.translatesAutoresizingMaskIntoConstraints = false
                 NSLayoutConstraint.activate([
-                    grid.leadingAnchor.constraint(equalTo: surface.content.leadingAnchor),
-                    grid.trailingAnchor.constraint(equalTo: surface.content.trailingAnchor),
-                    grid.topAnchor.constraint(equalTo: surface.content.topAnchor),
-                    grid.bottomAnchor.constraint(equalTo: surface.content.bottomAnchor),
+                    grid.leadingAnchor.constraint(
+                        equalTo: surface.content.leadingAnchor, constant: MessageMenuLayout.padding),
+                    grid.trailingAnchor.constraint(
+                        equalTo: surface.content.trailingAnchor,
+                        constant: -MessageMenuLayout.padding),
+                    grid.topAnchor.constraint(
+                        equalTo: surface.content.topAnchor, constant: MessageMenuLayout.padding),
+                    grid.bottomAnchor.constraint(
+                        equalTo: surface.content.bottomAnchor, constant: -MessageMenuLayout.padding),
                 ])
-                for start in stride(from: 0, to: menuActions.count, by: 5) {
-                    if start > 0 {
-                        let line = UIView()
-                        line.backgroundColor = .separator
-                        line.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale)
-                            .isActive = true
-                        grid.addArrangedSubview(line)
-                    }
+                let count = page.actions.count + (page.hasNavigation ? 1 : 0)
+                var actionIndex = page.actions.startIndex
+                for start in stride(from: 0, to: count, by: MessageMenuLayout.columns) {
                     let row = UIStackView()
                     row.distribution = .fillEqually
-                    for offset in 0..<5 {
-                        if start + offset < menuActions.count {
-                            let action = menuActions[start + offset]
-                            var config = UIButton.Configuration.plain()
-                            config.image = UIImage(systemName: action.symbol)
-                            config.preferredSymbolConfigurationForImage = .init(pointSize: 22)
-                            config.imagePlacement = .top
-                            config.imagePadding = 4
-                            config.contentInsets = .init(top: 5, leading: 3, bottom: 5, trailing: 3)
-                            let title =
-                                action == .save && value.context.isSaved
-                                ? AppLanguage.localized("Remove Saved Message")
-                                : action.label(
-                                    hasAttachments: value.row.entry.remoteMessage?.hasAttachments
-                                        == true)
-                            config.title = title
-                            config.titleTextAttributesTransformer =
-                                UIConfigurationTextAttributesTransformer { incoming in
-                                    var outgoing = incoming
-                                    outgoing.font = .preferredFont(forTextStyle: .caption2)
-                                    return outgoing
-                                }
-                            config.titleAlignment = .center
-                            config.baseForegroundColor = action == .delete ? .systemRed : .label
-                            let button = UIButton(configuration: config)
-                            button.titleLabel?.numberOfLines = 2
-                            button.isEnabled = policy.availability(of: action) == .enabled
-                            button.alpha = button.isEnabled ? 1 : 0.4
-                            button.accessibilityLabel = title
-                            button.accessibilityHint =
-                                button.isEnabled
-                                ? nil : AppLanguage.localized("Not implemented yet")
+                    for offset in 0..<MessageMenuLayout.columns {
+                        let slot = start + offset
+                        if slot >= count {
+                            row.addArrangedSubview(UIView())
+                            continue
+                        }
+                        let button: MessageInteractionButton
+                        if slot == page.navigationSlot {
+                            button = gridButton(
+                                title: page.navigationLabel, symbol: page.navigationSymbol,
+                                destructive: false, showsTitle: false)
+                            button.accessibilityIdentifier = "message-menu-page"
+                            button.addAction(
+                                UIAction { [weak self] _ in self?.changePage() },
+                                for: .touchUpInside)
+                        } else {
+                            let action = page.actions[actionIndex]
+                            page.actions.formIndex(after: &actionIndex)
+                            button = gridButton(
+                                title: action.label(
+                                    isSaved: value.context.isSaved,
+                                    isFavorite: value.context.isFavoriteSticker),
+                                symbol: action.symbol(
+                                    isSaved: value.context.isSaved,
+                                    isFavorite: value.context.isFavoriteSticker),
+                                destructive: action == .delete)
+                            button.isEnabled =
+                                policy.availability(of: action) == .enabled
+                                && callbackAvailable(for: action)
+                            button.alpha = button.isEnabled ? 1 : 0.5
                             button.addAction(
                                 UIAction { [weak self] _ in
                                     guard let self else { return }
-                                    self.presentation.onAction(action)
+                                    if action == .favorite || action == .toSticker
+                                        || action == .copy || action == .copyLink
+                                    {
+                                        let callback = self.presentation.onAction
+                                        self.deferredAction = { callback(action) }
+                                    } else {
+                                        self.presentation.onAction(action)
+                                    }
                                     self.close()
                                 }, for: .touchUpInside)
-                            row.addArrangedSubview(button)
-                        } else {
-                            row.addArrangedSubview(UIView())
                         }
+                        row.addArrangedSubview(button)
+                        keyboardButtons.append(button)
                     }
                     row.heightAnchor.constraint(equalToConstant: rowHeight).isActive = true
                     grid.addArrangedSubview(row)
                 }
                 surface.heightAnchor.constraint(
                     equalToConstant:
-                        CGFloat((menuActions.count + 4) / 5) * rowHeight
-                        + CGFloat(max(0, (menuActions.count + 4) / 5 - 1)) / UIScreen.main.scale
+                        CGFloat((count + MessageMenuLayout.columns - 1) / MessageMenuLayout.columns)
+                        * rowHeight + MessageMenuLayout.padding * 2
                 ).isActive = true
                 actionStack.addArrangedSubview(surface)
             }
@@ -446,7 +519,7 @@
                 value.actions.canEditPendingMessage(pending)
                     || value.actions.canRemovePendingMessage(pending)
             {
-                let surface = MessageInteractionSurface(radius: 14)
+                let surface = MessageInteractionSurface(radius: MessageMenuLayout.radius)
                 let stack = UIStackView()
                 stack.axis = .vertical
                 surface.content.addSubview(stack)
@@ -479,6 +552,7 @@
                             }
                         }, for: .touchUpInside)
                     stack.addArrangedSubview(button)
+                    keyboardButtons.append(button)
                     if !remove && canRemove {
                         let divider = UIView()
                         divider.backgroundColor = .separator
@@ -493,7 +567,78 @@
                 ).isActive = true
                 actionStack.addArrangedSubview(surface)
             }
+            view.accessibilityElements =
+                emojiPicker == nil
+                ? [reactions, actionsPanel, dim] : [placeholder, pickerSurface, dim]
+            if let keyboardIndex, !keyboardButtons.indices.contains(keyboardIndex) {
+                self.keyboardIndex = nil
+            }
             view.setNeedsLayout()
+            if let keyboardIndex {
+                (keyboardButtons[keyboardIndex] as? MessageInteractionButton)?.keyboardFocused =
+                    true
+            }
+        }
+        private func callbackAvailable(for action: MessageMenuAction) -> Bool {
+            switch action {
+            case .favorite:
+                presentation.actions.toggleStickerFavorite != nil
+                    && !(presentation.row.entry.remoteMessage?.sticker.map {
+                        presentation.actions.pendingStickerIDs.contains($0.id)
+                    } ?? false)
+            case .toSticker: presentation.actions.addMessageToStickerPack != nil
+            default: true
+            }
+        }
+        private func gridButton(
+            title: String, symbol: String, destructive: Bool, showsTitle: Bool = true
+        ) -> MessageInteractionButton {
+            let button = MessageInteractionButton(type: .system)
+            button.isGridAction = true
+            button.setImage(
+                UIImage(
+                    systemName: symbol,
+                    withConfiguration: UIImage.SymbolConfiguration(
+                        pointSize: MessageMenuLayout.actionIcon, weight: .regular)),
+                for: .normal)
+            button.imageView?.contentMode = .scaleAspectFit
+            if showsTitle { button.setTitle(title, for: .normal) }
+            button.titleLabel?.font = .systemFont(ofSize: MessageMenuLayout.labelSize)
+            button.titleLabel?.textAlignment = .center
+            button.tintColor =
+                destructive
+                ? UIColor {
+                    $0.userInterfaceStyle == .dark
+                        ? .systemRed : UIColor(red: 197 / 255, green: 0, blue: 15 / 255, alpha: 1)
+                }
+                : .label
+            button.setTitleColor(button.tintColor, for: .normal)
+            button.titleLabel?.numberOfLines = 1
+            button.titleLabel?.adjustsFontSizeToFitWidth = true
+            button.titleLabel?.minimumScaleFactor = 0.5
+            button.titleLabel?.lineBreakMode = .byClipping
+            button.layer.cornerRadius = 10
+            button.isAccessibilityElement = true
+            button.accessibilityLabel = title
+            return button
+        }
+        private func changePage() {
+            let page = MessageMenuPage(
+                actions: MessageActionPolicy(row: presentation.row, context: presentation.context)
+                    .actions,
+                page: menuPage)
+            menuPage = page.nextPage
+            keyboardIndex = nil
+            rebuildControls()
+            view.layoutIfNeeded()
+            UIAccessibility.post(notification: .layoutChanged, argument: actionsPanel)
+        }
+        @objc private func updateTransparency() {
+            backdrop.effect =
+                UIAccessibility.isReduceTransparencyEnabled
+                ? nil : UIBlurEffect(style: .systemMaterial)
+            backdrop.backgroundColor =
+                UIAccessibility.isReduceTransparencyEnabled ? .systemBackground : .clear
         }
         private func react(_ emoji: String) {
             guard presentation.eligibility.canToggle(emoji) else { return }
@@ -516,6 +661,7 @@
             emojiPicker = picker
             pickerSurface.content.addSubview(picker)
             dim.accessibilityLabel = AppLanguage.localized("Dismiss emoji picker")
+            view.accessibilityElements = [placeholder, pickerSurface, dim]
             view.setNeedsLayout()
             let changes = { self.view.layoutIfNeeded() }
             UIView.animate(withDuration: reduceMotion ? 0.15 : 0.25, animations: changes)
@@ -553,7 +699,7 @@
             let bounds = CGRect(
                 x: safe.minX, y: safe.minY + popoverSpace, width: safe.width,
                 height: max(1, bottom - safe.minY - popoverSpace - dockSpace))
-            let width = min(276, max(1, bounds.width - 32))
+            let width = min(MessageMenuLayout.width, max(1, bounds.width - 32))
             actionHeight =
                 actionStack.systemLayoutSizeFitting(
                     CGSize(width: width, height: 0), withHorizontalFittingPriority: .required,
@@ -563,8 +709,10 @@
             let placement = MessageOverlayLayout(
                 bounds: bounds, source: presentation.source.rect,
                 previewSize: bubbleSize, controlsWidth: width,
-                reactionHeight: policy.canReact ? (picking ? 76 : 52) : 0,
-                actionsHeight: picking ? 0 : actionHeight, isOutgoing: presentation.row.isOutgoing)
+                reactionHeight: policy.canReact
+                    ? (picking ? 76 : MessageMenuLayout.reactionHeight) : 0,
+                actionsHeight: picking ? 0 : actionHeight, isOutgoing: presentation.row.isOutgoing,
+                pressPoint: presentation.source.pressPoint)
             let frame = placement.previewFrame
             previewViewport.bounds = CGRect(origin: .zero, size: frame.size)
             previewViewport.center =
@@ -575,16 +723,29 @@
                         * (bubbleSize.width - frame.width) * initialScale / 2,
                     y: presentation.source.rect.minY + frame.height / 2
                         + (bubbleSize.height - frame.height) * (1 - initialScale) / 2)
+            let clipsWidth = frame.width < bubbleSize.width
+            // Clip oversized content only on its inward edge. The native droplet
+            // extends past the measured body on the outward edge.
+            let leadingOverflow =
+                clipsWidth && !presentation.row.isOutgoing ? bubbleSize.width : 0
+            let trailingOverflow =
+                clipsWidth && presentation.row.isOutgoing ? bubbleSize.width : 0
+            previewClip.frame = CGRect(
+                x: -leadingOverflow, y: 0,
+                width: frame.width + leadingOverflow + trailingOverflow, height: frame.height)
             preview.frame = CGRect(
-                x: presentation.row.isOutgoing ? frame.width - bubbleSize.width : 0,
+                x: leadingOverflow
+                    + (presentation.row.isOutgoing ? frame.width - bubbleSize.width : 0),
                 y: 0, width: bubbleSize.width, height: bubbleSize.height)
-            previewClip.frame = previewViewport.bounds
-            previewViewport.layer.shadowPath =
-                UIBezierPath(
-                    roundedRect: previewViewport.bounds, cornerRadius: 16
-                ).cgPath
-            reactions.frame = placement.reactionFrame
-            reactionStack.frame = reactions.bounds.insetBy(dx: 6, dy: 4)
+            // Let the rendered native contour, including the tail and asymmetric
+            // group corners, supply the shadow instead of a generic rounded path.
+            previewClip.clipsToBounds = clipsWidth
+            reactions.bounds = CGRect(origin: .zero, size: placement.reactionFrame.size)
+            let offsetY = entered || reduceMotion ? 0 : presentation.source.rect.minY - frame.minY
+            reactions.center = CGPoint(
+                x: placement.reactionFrame.midX, y: placement.reactionFrame.midY + offsetY)
+            reactionStack.frame = reactions.bounds.insetBy(
+                dx: MessageMenuLayout.padding, dy: MessageMenuLayout.padding)
             reactions.isHidden = !policy.canReact || picking
             for child in reactionStack.subviews {
                 guard let progress = child as? UIActivityIndicatorView else { continue }
@@ -596,10 +757,11 @@
                     progress.startAnimating()
                 }
             }
-            actionsScroll.frame = placement.actionsFrame
+            actionsPanel.bounds = CGRect(origin: .zero, size: placement.actionsFrame.size)
+            actionsPanel.center = CGPoint(
+                x: placement.actionsFrame.midX, y: placement.actionsFrame.midY + offsetY)
             actionStack.frame = CGRect(x: 0, y: 0, width: width, height: actionHeight)
-            actionsScroll.contentSize = CGSize(width: width, height: actionHeight)
-            actionsScroll.isHidden = picking
+            actionsPanel.isHidden = picking
             placeholder.isHidden = !picking
             placeholder.frame = CGRect(
                 x: min(bounds.maxX - 76, max(bounds.minX, frame.maxX - 76)),
@@ -638,7 +800,8 @@
                         width: safe.width, height: keyboardHeight)
                 }
             }
-            preview.refreshMediaVisibility(isFullyVisible: frame.size == bubbleSize)
+            preview.refreshMediaVisibility(
+                isFullyVisible: frame.size == bubbleSize && view.bounds.contains(frame))
         }
         @objc private func keyboardChanged(_ notification: Notification) {
             keyboardFrame =
@@ -652,35 +815,37 @@
             view.setNeedsLayout()
             UIView.animate(withDuration: duration, animations: { self.view.layoutIfNeeded() })
         }
-        func mount(scale: CGFloat, opacity: CGFloat) {
-            initialScale = scale
+        func mount(opacity: CGFloat) {
+            initialScale = reduceMotion ? 1 : 0.92
             view.layoutIfNeeded()
             backdrop.alpha = 0
             reactions.alpha = 0
-            actionsScroll.alpha = 0
+            actionsPanel.alpha = 0
             previewViewport.alpha = opacity
             previewViewport.layer.shadowOpacity = 0
-            previewViewport.transform = CGAffineTransform(scaleX: scale, y: scale)
+            previewViewport.transform = CGAffineTransform(scaleX: initialScale, y: initialScale)
             preview.setVisible(true)
+            if !reduceMotion {
+                reactions.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+                actionsPanel.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+            }
         }
         func enter() {
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.exiting, self.view.window != nil else { return }
                 self.entered = true
                 let animator = UIViewPropertyAnimator(
-                    duration: self.reduceMotion ? 0.16 : 0.38,
-                    dampingRatio: self.reduceMotion ? 1 : 0.82
+                    duration: 0.18, curve: .easeOut
                 ) { [weak self] in
                     guard let self else { return }
                     self.backdrop.alpha = 1
                     self.reactions.alpha = 1
-                    self.actionsScroll.alpha = 1
+                    self.actionsPanel.alpha = 1
                     self.previewViewport.alpha = 1
                     self.previewViewport.layer.shadowOpacity = 0.24
-                    self.previewViewport.transform =
-                        self.reduceMotion
-                        ? .identity
-                        : CGAffineTransform(scaleX: 1.035, y: 1.035)
+                    self.previewViewport.transform = .identity
+                    self.reactions.transform = .identity
+                    self.actionsPanel.transform = .identity
                     self.view.setNeedsLayout()
                     self.view.layoutIfNeeded()
                 }
@@ -688,41 +853,37 @@
                 animator.startAnimation()
                 UIAccessibility.post(
                     notification: .screenChanged,
-                    argument: self.reactions.isHidden ? self.actionsScroll : self.reactions)
-                if !self.reduceMotion {
-                    let settle = DispatchWorkItem { [weak self] in
-                        guard let self, !self.exiting else { return }
-                        UIView.animate(
-                            withDuration: 0.3, delay: 0,
-                            usingSpringWithDamping: 0.8, initialSpringVelocity: 0,
-                            options: [.beginFromCurrentState]
-                        ) { self.previewViewport.transform = .identity }
-                    }
-                    self.settle = settle
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: settle)
-                }
+                    argument: self.reactions.isHidden ? self.actionsPanel : self.reactions)
             }
+        }
+        func takeDeferredAction() -> (() -> Void)? {
+            let action = deferredAction
+            deferredAction = nil
+            return action
         }
         func leave(completion: @escaping () -> Void) {
             exiting = true
-            settle?.cancel()
             animation?.stopAnimation(true)
             view.endEditing(true)
             view.isUserInteractionEnabled = false
             entered = false
             UIView.animate(
-                withDuration: reduceMotion ? 0.15 : 0.28,
+                withDuration: 0.12,
                 delay: 0, options: [.beginFromCurrentState, .curveEaseOut]
             ) {
                 self.backdrop.alpha = 0
                 self.reactions.alpha = 0
-                self.actionsScroll.alpha = 0
+                self.actionsPanel.alpha = 0
                 self.placeholder.alpha = 0
                 self.pickerSurface.alpha = 0
                 self.pickerArrow.alpha = 0
                 self.previewViewport.alpha = self.reduceMotion ? 0 : 1
                 self.previewViewport.layer.shadowOpacity = 0
-                self.previewViewport.transform = .identity
+                let transform: CGAffineTransform =
+                    self.reduceMotion ? .identity : CGAffineTransform(scaleX: 0.92, y: 0.92)
+                self.previewViewport.transform = transform
+                self.reactions.transform = transform
+                self.actionsPanel.transform = transform
                 self.view.setNeedsLayout()
                 self.view.layoutIfNeeded()
             } completion: { _ in
@@ -731,7 +892,7 @@
         }
         func cleanup() {
             exiting = true
-            settle?.cancel()
+            deferredAction = nil
             animation?.stopAnimation(true)
             stopAnimations(in: view)
             view.endEditing(true)
@@ -754,38 +915,88 @@
 
     @MainActor final class MessageInteractionSurface: UIView {
         let content = UIView()
-        private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
-        private let wash = UIView()
         init(radius: CGFloat) {
             super.init(frame: .zero)
             layer.cornerRadius = radius
             layer.shadowColor = UIColor.black.cgColor
-            layer.shadowOpacity = 0.2
-            layer.shadowRadius = 16
-            layer.shadowOffset = CGSize(width: 0, height: 8)
-            blur.layer.cornerRadius = radius
-            blur.clipsToBounds = true
+            layer.shadowOpacity = 0.12
+            layer.shadowRadius = 20
+            layer.shadowOffset = CGSize(width: 0, height: 4)
             content.layer.cornerRadius = radius
             content.clipsToBounds = true
-            addSubview(blur)
-            blur.contentView.addSubview(wash)
-            addSubview(content)
-            wash.backgroundColor = UIColor { traits in
-                (traits.userInterfaceStyle == .dark ? UIColor(white: 0.12, alpha: 1) : .white)
-                    .withAlphaComponent(traits.accessibilityContrast == .high ? 1 : 0.65)
+            content.backgroundColor = UIColor { traits in
+                traits.userInterfaceStyle == .dark ? UIColor(white: 0.12, alpha: 1) : .white
             }
+            addSubview(content)
         }
         required init?(coder: NSCoder) { nil }
         func setRoundedCorners(_ corners: CACornerMask) {
             layer.maskedCorners = corners
-            blur.layer.maskedCorners = corners
             content.layer.maskedCorners = corners
         }
         override func layoutSubviews() {
             super.layoutSubviews()
-            blur.frame = bounds
-            wash.frame = bounds
             content.frame = bounds
+        }
+    }
+
+    /// Native buttons retain UIKit keyboard/VoiceOver activation; a hover recognizer
+    /// supplies the same matte highlight for an iPad pointer without a lifted effect.
+    @MainActor final class MessageInteractionButton: UIButton {
+        var showsSelection = false { didSet { updateHighlight() } }
+        var isGridAction = false
+        var keyboardFocused = false { didSet { updateHighlight() } }
+        private var hovering = false
+        private static let highlightColor = UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(white: 0.22, alpha: 1)
+                : UIColor(red: 244 / 255, green: 245 / 255, blue: 248 / 255, alpha: 1)
+        }
+        override var isHighlighted: Bool { didSet { updateHighlight() } }
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            addGestureRecognizer(
+                UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
+        }
+        required init?(coder: NSCoder) { nil }
+        private func gridIconBox(in contentRect: CGRect) -> CGRect {
+            let height =
+                currentTitle == nil
+                ? MessageMenuLayout.actionIcon
+                : MessageMenuLayout.actionIcon + MessageMenuLayout.labelGap
+                    + MessageMenuLayout.labelLineHeight
+            return CGRect(
+                x: contentRect.midX - MessageMenuLayout.actionIcon / 2,
+                y: contentRect.midY - height / 2,
+                width: MessageMenuLayout.actionIcon, height: MessageMenuLayout.actionIcon)
+        }
+        override func imageRect(forContentRect contentRect: CGRect) -> CGRect {
+            guard isGridAction else { return super.imageRect(forContentRect: contentRect) }
+            return MessageMenuLayout.symbolRect(
+                for: currentImage?.size ?? .zero, in: gridIconBox(in: contentRect))
+        }
+        override func titleRect(forContentRect contentRect: CGRect) -> CGRect {
+            guard isGridAction else { return super.titleRect(forContentRect: contentRect) }
+            return CGRect(
+                x: contentRect.minX + 1,
+                y: gridIconBox(in: contentRect).maxY + MessageMenuLayout.labelGap,
+                width: max(0, contentRect.width - 2), height: MessageMenuLayout.labelLineHeight)
+        }
+        override func didUpdateFocus(
+            in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator
+        ) {
+            super.didUpdateFocus(in: context, with: coordinator)
+            updateHighlight()
+        }
+        @objc private func hover(_ recognizer: UIHoverGestureRecognizer) {
+            hovering = recognizer.state == .began || recognizer.state == .changed
+            updateHighlight()
+        }
+        private func updateHighlight() {
+            backgroundColor =
+                showsSelection || keyboardFocused || isFocused
+                    || (isEnabled && (hovering || isHighlighted))
+                ? Self.highlightColor : .clear
         }
     }
 #endif

@@ -61,16 +61,19 @@
         }
 
         fileprivate func capture(touch: UITouch, event: UIEvent) -> MessageRowTouchSession? {
+            let secondary =
+                event.buttonMask.contains(.secondary)
+                || (touch.type == .indirectPointer && event.modifierFlags.contains(.control))
             guard let view, view.window != nil,
                 !nativeControlOwnsTouch(
-                    touch, in: view, allowsVoiceContextMenu: event.buttonMask.contains(.secondary))
+                    touch, in: view, allowsVoiceContextMenu: secondary)
             else { return nil }
             let input: MessageRowTouchSession.Input
             switch touch.type {
             case .direct:
                 input = .finger
             case .indirectPointer:
-                if event.buttonMask.contains(.secondary) {
+                if secondary {
                     input = .secondaryPointer
                 } else if event.buttonMask.contains(.primary) {
                     input = .primaryPointer
@@ -319,7 +322,7 @@
 
     struct MessageRowBubbleConfiguration {
         weak var view: UIView?
-        let open: (CGRect, MessageBubblePressFeedback?) -> Void
+        let open: (CGRect, CGPoint, MessageBubblePressFeedback?) -> Void
     }
 
     private final class MessageRowTouchSession {
@@ -334,7 +337,7 @@
         let bubbleID: ObjectIdentifier?
         let bubbleRect: CGRect?
         weak var bubbleView: UIView?
-        let open: ((CGRect, MessageBubblePressFeedback?) -> Void)?
+        let open: ((CGRect, CGPoint, MessageBubblePressFeedback?) -> Void)?
         let tapID: ObjectIdentifier?
         let action: (() -> Void)?
         var owner = Owner.undecided
@@ -346,7 +349,7 @@
             touch: UITouch, input: Input, origin: CGPoint, rowID: ObjectIdentifier,
             swipe: MessageRowSwipeConfiguration,
             bubbleID: ObjectIdentifier?, bubbleRect: CGRect?, bubbleView: UIView?,
-            open: ((CGRect, MessageBubblePressFeedback?) -> Void)?,
+            open: ((CGRect, CGPoint, MessageBubblePressFeedback?) -> Void)?,
             tapID: ObjectIdentifier?, action: (() -> Void)?
         ) {
             self.touch = touch
@@ -555,7 +558,12 @@
                 holdFeedback?.impactOccurred(intensity: 0.8)
             }
             holdFeedback = nil
-            captured.open?(windowRect, captured.pressFeedback)
+            let point = captured.touch.location(in: view)
+            let windowPoint = coordinator?.windowRect(
+                for: CGRect(origin: point, size: CGSize(width: 1, height: 1)))?.origin
+            captured.open?(
+                windowRect, windowPoint ?? CGPoint(x: windowRect.midX, y: windowRect.midY),
+                captured.pressFeedback)
         }
 
         private func move(to point: CGPoint) {

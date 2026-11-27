@@ -31,6 +31,8 @@ struct ChatState: Equatable {
     var notificationDefaults: NotificationSettingsResponse?
     var listAvailability: [CachedListScope: ChatListAvailability] = [:]
     var savedListHasMore = Set<CachedListScope>()
+    var savedListCursors: [CachedListScope: CachedListPage.Cursor] = [:]
+    var savedListPagePhases: [CachedListScope: ChatListLoadPhase] = [:]
     var chats: [ChatListItem] = []
     var chatListLoadPhase: ChatListLoadPhase = .idle
     var chatListRefreshFailed = false
@@ -269,7 +271,6 @@ final class ChatStore: ObservableObject {
     private var refreshTasks: [ListKind: (task: Task<Void, Never>, ignoresPath: Bool)] = [:]
     private var listHydrationTasks: [ListKind: Task<Void, Never>] = [:]
     private var savedListsRead = Set<ListKind>()
-    private var savedListCursors: [ListKind: CachedListPage.Cursor] = [:]
     private var refreshGeneration = 0
     private var invalidationTask: Task<Void, Never>?
     private var dirtyLists = Set<ListKind>()
@@ -768,10 +769,12 @@ final class ChatStore: ObservableObject {
     func refreshArchivedChats() async { await refreshList(.archivedChats) }
     func refreshArchivedThreads() async { await refreshList(.archivedThreads) }
 
-    func loadMoreSavedConversations(chats: Bool, threads: Bool, archived: Bool) async {
+    func loadMoreSavedConversations(
+        chats: Bool, threads: Bool, archived: Bool, retry: Bool = false
+    ) async {
         await withTaskGroup(of: Void.self) { group in
             for list in ListKind.selected(chats: chats, threads: threads, archived: archived) {
-                group.addTask { await self.hydrateList(list, nextPage: true) }
+                group.addTask { await self.hydrateList(list, nextPage: true, retry: retry) }
             }
         }
     }
@@ -814,7 +817,6 @@ final class ChatStore: ObservableObject {
         fallbackKeys.removeAll()
         readFenceReconciliations.removeAll()
         savedListsRead.removeAll()
-        savedListCursors.removeAll()
         listReadReceipts.reset()
 
         var snapshot = state
@@ -824,6 +826,8 @@ final class ChatStore: ObservableObject {
         snapshot.archivedThreads.removeAll()
         snapshot.listAvailability.removeAll()
         snapshot.savedListHasMore.removeAll()
+        snapshot.savedListCursors.removeAll()
+        snapshot.savedListPagePhases.removeAll()
         for list in ListKind.allCases {
             snapshot[keyPath: list.phase] = .idle
             snapshot[keyPath: list.refreshing] = false
@@ -845,18 +849,27 @@ final class ChatStore: ObservableObject {
         await refreshList(list)
     }
 
-    private func hydrateList(_ list: ListKind, nextPage: Bool = false) async {
-        guard let historyCache, historyCache.isAvailable else { return }
+    private func hydrateList(_ list: ListKind, nextPage: Bool = false, retry: Bool = false) async {
+        let scope = list.cacheScope
+        guard let historyCache, historyCache.isAvailable else {
+            if nextPage, state.savedListHasMore.contains(scope) {
+                state.savedListPagePhases[scope] = .failed
+            }
+            return
+        }
         if let task = listHydrationTasks[list] {
             await task.value
             return
         }
-        let cursor = savedListCursors[list]
+        let cursor = state.savedListCursors[scope]
         guard nextPage ? cursor != nil : !savedListsRead.contains(list) else { return }
+        // Appearance and cursor changes can retrigger the footer. Only explicit
+        // Retry may repeat a failed cursor; concurrent requests share the task above.
+        guard !nextPage || retry || state.savedListPagePhases[scope] != .failed else { return }
+        if nextPage { state.savedListPagePhases[scope] = .loading }
 
         let requestGeneration = generation
         let cacheRevision = historyCache.revision
-        let scope = list.cacheScope
         let task = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -885,13 +898,24 @@ final class ChatStore: ObservableObject {
                     guard listRevision == listStateRevision else { continue }
                     savedListsRead.insert(list)
                     if let page {
+                        guard !nextPage || page.next != cursor else {
+                            state.savedListPagePhases[scope] = .failed
+                            return
+                        }
                         installSavedListPage(page, list: list)
                     } else if nextPage {
-                        savedListCursors[list] = nil
+                        state.savedListCursors[scope] = nil
                         state.savedListHasMore.remove(scope)
                     }
+                    state.savedListPagePhases[scope] = .loaded
                 } catch {
-                    // A missing or unavailable database must not block HTTP.
+                    // Initial cache failure must not block HTTP. A later-page
+                    // failure retains visible rows and waits for explicit Retry.
+                    if nextPage, generation == requestGeneration,
+                        historyCache.revision == cacheRevision, !Task.isCancelled
+                    {
+                        state.savedListPagePhases[scope] = .failed
+                    }
                 }
                 return
             }
@@ -942,7 +966,7 @@ final class ChatStore: ObservableObject {
         if snapshot.listAvailability[scope] == nil {
             snapshot.listAvailability[scope] = .cached(complete: page.complete)
         }
-        savedListCursors[list] = page.next
+        snapshot.savedListCursors[scope] = page.next
         if page.next != nil {
             snapshot.savedListHasMore.insert(scope)
         } else {
@@ -1049,7 +1073,8 @@ final class ChatStore: ObservableObject {
                 } while accountListForced || accountListDirty || !accountListRequestedScopes.isEmpty
                 finishResumeListRefresh(
                     succeeded: !ListKind.allCases.contains {
-                        state[keyPath: $0.phase] == .failed || state[keyPath: $0.refreshFailed]
+                        self.state[keyPath: $0.phase] == .failed
+                            || self.state[keyPath: $0.refreshFailed]
                     })
             } catch {
                 guard accountListSerial == serial, generation == requestGeneration,
@@ -1321,7 +1346,8 @@ final class ChatStore: ObservableObject {
                     }
                 }
                 savedListsRead.insert(list)
-                savedListCursors[list] = page.next
+                snapshot.savedListCursors[list.cacheScope] = page.next
+                snapshot.savedListPagePhases[list.cacheScope] = .loaded
                 if page.next != nil {
                     snapshot.savedListHasMore.insert(list.cacheScope)
                 } else {
@@ -1513,7 +1539,8 @@ final class ChatStore: ObservableObject {
                 if complete {
                     snapshot[keyPath: list.phase] = .loaded
                     snapshot[keyPath: list.refreshFailed] = false
-                    savedListCursors[list] = nil
+                    snapshot.savedListCursors[scope] = nil
+                    snapshot.savedListPagePhases[scope] = .loaded
                     snapshot.savedListHasMore.remove(scope)
                 }
                 let membership = complete ? seen : nil

@@ -85,6 +85,65 @@ final class RealtimeConnectionTests: XCTestCase {
         await server.stop()
     }
 
+    func testMessageStickerConversionUsesAuthenticatedRPCWithExactSourceIDs() async throws {
+        let server = try await RealtimeLoopbackServer.start()
+        await server.setPreviewReply(
+            #""result":{"id":"sticker","emoji":"😊","createdAt":"2026-09-01T01:02:03Z","isFavorited":false,"media":{"id":"media","url":"https://cdn.example/sticker.webp","contentType":"image/webp","size":5}}"#
+        )
+        do {
+            let client = ChahuaClient(
+                configuration: .init(baseURL: await server.baseURL), token: "installed")
+            let sticker = try await client.createStickerFromMessage(
+                packID: "9007199254740993", chatID: "9007199254740995",
+                messageID: MessageID(9_007_199_254_740_997), emoji: "😊", name: "Smile")
+            XCTAssertEqual(sticker.id, "sticker")
+            let frames = try await server.rpcFrames.map {
+                try XCTUnwrap(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            XCTAssertEqual(
+                frames.compactMap { $0["method"] as? String },
+                ["session.open", "session.setAppState", "stickers.createFromMessage"])
+            let params = try XCTUnwrap(frames[2]["params"] as? [String: Any])
+            XCTAssertEqual(params["packId"] as? String, "9007199254740993")
+            XCTAssertEqual(params["chatId"] as? String, "9007199254740995")
+            XCTAssertEqual(params["messageId"] as? String, "9007199254740997")
+            XCTAssertEqual(params["emoji"] as? String, "😊")
+            XCTAssertEqual(params["name"] as? String, "Smile")
+            XCTAssertNil(params["description"])
+            await server.stop()
+        } catch {
+            await server.stop()
+            throw error
+        }
+    }
+
+    func testMessageStickerConversionPreservesDefiniteSourceAndPermissionRejections() async throws {
+        for (code, expectedStatus) in [
+            (1000, 400), (1003, 403), (1004, 404), (1009, 409), (1013, 413),
+        ] {
+            let server = try await RealtimeLoopbackServer.start()
+            await server.setPreviewReply("\"error\":{\"code\":\(code),\"message\":\"Rejected\"}")
+            let client = ChahuaClient(
+                configuration: .init(baseURL: await server.baseURL), token: "installed")
+            do {
+                _ = try await client.createStickerFromMessage(
+                    packID: "1", chatID: "2", messageID: MessageID(3), emoji: "😊", name: nil)
+                XCTFail("A rejected conversion must not report success")
+            } catch APIError.http(let status, _) {
+                XCTAssertEqual(status, expectedStatus)
+            } catch {
+                await server.stop()
+                throw error
+            }
+            let frames = await server.rpcFrames
+            XCTAssertEqual(
+                frames.filter {
+                    String(decoding: $0, as: UTF8.self).contains("stickers.createFromMessage")
+                }.count, 1, "A sticker mutation must never automatically retry")
+            await server.stop()
+        }
+    }
+
     func testOpeningUsesInstalledJWTAndPreservesAPIPrefixWithoutTicketOrRefresh() async throws {
         let server = try await RealtimeLoopbackServer.start()
         do {
@@ -659,7 +718,10 @@ private actor RealtimeLoopbackServer {
                         if opcode == 8 { break }
                         let frame = try JSONDecoder().decode(PreviewRPCFrame.self, from: data)
                         rpcFrames.append(data)
-                        if frame.method == "messages.previewLinks", let previewReply {
+                        if frame.method == "messages.previewLinks"
+                            || frame.method == "stickers.createFromMessage",
+                            let previewReply
+                        {
                             try await wire.sendFrame(
                                 opcode: 1,
                                 data: Data("{\"jsonrpc\":\"2.0\",\"id\":2,\(previewReply)}".utf8))

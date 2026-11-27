@@ -264,6 +264,89 @@ final class TimelineRowsBuilderTests: XCTestCase {
             builder().build(messages).compactMap(\.stableMessageKey))
     }
 
+    func testClipboardTextExpandsEveryMentionWithoutChangingStoredText() throws {
+        let source = "Hi @[uid:2], @[uid:3], and @[uid:2]!"
+        let message = try TimelineTestFixtures.message(
+            id: 1, at: 0, text: source,
+            fields: [
+                "mentions": [
+                    [
+                        "uid": 2, "gender": 0, "username": "Ada",
+                        "avatarUrl": NSNull(), "userGroup": NSNull(),
+                    ],
+                    [
+                        "uid": 3, "gender": 0, "username": "林",
+                        "avatarUrl": NSNull(), "userGroup": NSNull(),
+                    ],
+                ]
+            ])
+        let entry = ConversationTimelineEntry.remote(message)
+
+        XCTAssertEqual(entry.clipboardText, "Hi @Ada, @林, and @Ada!")
+        XCTAssertEqual(entry.text, source)
+        XCTAssertEqual(message.message, source)
+    }
+
+    func testClipboardTextUsesDisplayedFallbackForAbsentAndEmptyMentionNames() throws {
+        let source = "@[uid:2] @[uid:3] @[uid:4]"
+        let message = try TimelineTestFixtures.message(
+            id: 1, at: 0, text: source,
+            fields: [
+                "mentions": [
+                    [
+                        "uid": 2, "gender": 0, "username": NSNull(),
+                        "avatarUrl": NSNull(), "userGroup": NSNull(),
+                    ],
+                    [
+                        "uid": 3, "gender": 0, "username": "",
+                        "avatarUrl": NSNull(), "userGroup": NSNull(),
+                    ],
+                ]
+            ])
+
+        XCTAssertEqual(
+            ConversationTimelineEntry.remote(message).clipboardText, "@User 2 @User 3 @User 4")
+    }
+
+    func testClipboardTextPreservesLinksLineBreaksMarkdownAndUnknownText() throws {
+        let source =
+            "👋 **Hello** @[uid:2]\r\n[site](https://example.com/a?q=1)\n"
+            + "https://example.com/raw\n`code` ||spoiler|| @[uid:no] @[uid:99999999999999999999]"
+        let message = try TimelineTestFixtures.message(
+            id: 1, at: 0,
+            fields: [
+                "message": source,
+                "mentions": [
+                    [
+                        "uid": 2, "gender": 0, "username": "Ada",
+                        "avatarUrl": NSNull(), "userGroup": NSNull(),
+                    ]
+                ],
+            ])
+        let expected = source.replacingOccurrences(of: "@[uid:2]", with: "@Ada")
+
+        XCTAssertEqual(ConversationTimelineEntry.remote(message).clipboardText, expected)
+        XCTAssertEqual(message.message, source)
+    }
+
+    func testClipboardTextPreservesOrdinaryTextExactly() {
+        for source in ["", "ordinary @name text", "  https://example.com\nsecond line\t"] {
+            XCTAssertEqual(MessageMentions.plainText(source, mentions: []), source)
+        }
+    }
+
+    func testClipboardTextKeepsQueuedMessagesCopyableWithoutExposingDeletedText() throws {
+        let pending = TimelineTestFixtures.pending(
+            id: "queued", text: "Hello @[uid:2]\nQueued")
+        let entry = ConversationTimelineEntry.pending(pending)
+        XCTAssertEqual(entry.clipboardText, "Hello @User 2\nQueued")
+        XCTAssertEqual(entry.text, "Hello @[uid:2]\nQueued")
+
+        let deleted = try TimelineTestFixtures.message(
+            id: 1, at: 0, text: "Deleted @[uid:2]", isDeleted: true)
+        XCTAssertNil(ConversationTimelineEntry.remote(deleted).clipboardText)
+    }
+
     private func builder() -> TimelineRowsBuilder {
         TimelineRowsBuilder(currentUserID: 1, calendar: calendar)
     }

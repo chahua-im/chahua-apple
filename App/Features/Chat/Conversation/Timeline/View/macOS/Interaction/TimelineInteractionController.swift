@@ -13,6 +13,7 @@
             let key: ConversationMessageStableKey
             let sourceRect: CGRect
             let sourceContour: CGPath
+            let pressPoint: CGPoint?
         }
 
         private let model: ConversationTimelineModel
@@ -89,7 +90,8 @@
             finishDismissal()
             self.timelineView = timelineView
             target = Target(
-                key: live.entry.stableKey, sourceRect: source.rect, sourceContour: source.contour)
+                key: live.entry.stableKey, sourceRect: source.rect, sourceContour: source.contour,
+                pressPoint: source.pressPoint)
             previousFirstResponder = window.firstResponder
             if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
                 let owner = editor.delegate as? NSResponder
@@ -109,6 +111,9 @@
             self.overlay = overlay
             overlay.frame = overlayHost.bounds
             overlay.autoresizingMask = [.width, .height]
+            overlay.capturePresentation(
+                content: content, timeline: timelineView, sourceRect: source.rect,
+                sourceContour: source.contour)
             // SwiftUI supplies an app-owned, window-wide native container. Never
             // attach children to NSHostingView or AppKit's private theme frame.
             overlayHost.addSubview(overlay, positioned: .above, relativeTo: nil)
@@ -174,9 +179,16 @@
                     x: rect.minX, y: content.bounds.maxY - rect.maxY,
                     width: rect.width, height: rect.height)
             let localSource = overlay.convert(sourceInContent, from: content)
+            let localPress = target.pressPoint.map { point in
+                overlay.convert(
+                    content.isFlipped
+                        ? point : CGPoint(x: point.x, y: content.bounds.maxY - point.y),
+                    from: content)
+            }
             overlay.configure(
-                row: row, context: actions.pinContext(for: row, base: context),
-                actions: actions, sourceRect: localSource, sourceContour: target.sourceContour)
+                row: row, context: menuContext(for: row), actions: actions,
+                sourceRect: localSource, sourceContour: target.sourceContour, pressPoint: localPress
+            )
         }
 
         func dismiss(animated: Bool = true) {
@@ -247,6 +259,15 @@
             target.flatMap { liveRow(for: $0.key) }
         }
 
+        private func menuContext(for row: TimelineMessageRow) -> MessageInteractionContext {
+            var result = actions.pinContext(for: row, base: context)
+            result.isFavoriteSticker =
+                row.entry.remoteMessage.map {
+                    actions.isStickerFavorite?($0) ?? false
+                } ?? false
+            return result
+        }
+
         private func react(_ emoji: String) {
             guard let row = selectedRow else {
                 dismiss()
@@ -283,7 +304,7 @@
                 return
             }
             guard
-                MessageActionPolicy(row: row, context: actions.pinContext(for: row, base: context))
+                MessageActionPolicy(row: row, context: menuContext(for: row))
                     .availability(of: action) == .enabled
             else {
                 refresh()
@@ -291,23 +312,39 @@
             }
             switch action {
             case .copy:
-                guard let text = row.entry.text else { return }
+                guard let text = row.entry.clipboardText else { return }
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
+                let copied = NSPasteboard.general.setString(text, forType: .string)
                 dismiss()
+                if copied { actions.didCopyMessage?() }
             case .copyLink:
                 guard let message = row.entry.remoteMessage,
                     let link = MessagePermalink(chatID: message.chatId, messageID: message.id)
                 else { return }
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(link.url.absoluteString, forType: .string)
+                let copied = NSPasteboard.general.setString(
+                    link.url.absoluteString, forType: .string)
                 dismiss()
+                if copied { actions.didCopyMessage?() }
             case .save:
                 guard let message = row.entry.remoteMessage,
                     let toggleSaved = actions.toggleSavedMessage
                 else { return }
                 dismiss()
                 toggleSaved(message)
+            case .favorite:
+                guard let message = row.entry.remoteMessage, let sticker = message.sticker,
+                    !actions.pendingStickerIDs.contains(sticker.id),
+                    let toggle = actions.toggleStickerFavorite
+                else { return }
+                dismiss()
+                toggle(message)
+            case .toSticker:
+                guard let message = row.entry.remoteMessage,
+                    let addToPack = actions.addMessageToStickerPack
+                else { return }
+                dismiss()
+                addToPack(message)
             case .select, .forward:
                 guard let message = row.entry.remoteMessage else { return }
                 let callback =
@@ -349,8 +386,6 @@
                 // Remove the overlay before SwiftUI starts the modal sheet's run loop.
                 dismiss(animated: false)
                 openDetails(message)
-            default:
-                break  // Policy keeps unsupported actions visible but disabled.
             }
         }
 

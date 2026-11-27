@@ -24,11 +24,13 @@ final class StickerLibrary: ObservableObject {
     @Published private(set) var discoveryRevision = 0
     @Published private(set) var discoveryPageRequest = false
     @Published private(set) var accountID: Int32?
+    @Published private(set) var hasLoadedLibrary = false
 
     private let apiClient: any ChahuaAPIClient
     private let onInvalidToken: @MainActor @Sendable () async -> Void
     private var generation = 0
-    private var hasLoadedLibrary = false
+    private var messageStickerSaves: [String: MessageStickerResponse] = [:]
+    private var uncertainMessageStickerSaves = Set<String>()
     private var discoveryRequestID = UUID()
     private var discoveryTask: Task<StickerPackDiscoveryResponse, Error>?
     private var discoveryQuery = ""
@@ -351,9 +353,10 @@ final class StickerLibrary: ObservableObject {
         ownedPackIDs.contains(id)
     }
 
-    func toggleFavorite(_ sticker: MessageStickerResponse) async {
+    @discardableResult
+    func toggleFavorite(_ sticker: MessageStickerResponse) async -> Bool {
         guard !sticker.id.isEmpty, !pendingMutationIDs.contains(sticker.id), !Task.isCancelled
-        else { return }
+        else { return false }
         let requestGeneration = generation
         let favorite = !isFavorite(sticker)
         pendingMutationIDs.insert(sticker.id)
@@ -370,11 +373,13 @@ final class StickerLibrary: ObservableObject {
             if isLoading { refreshChanges.append(.favorite(sticker, favorite)) }
             sortFavorites()
             normalizeCaches()
+            return true
         } catch {
             await report(
                 error, generation: requestGeneration,
                 message: AppLanguage.localized(
                     "Couldn’t update favorite sticker. Please try again."))
+            return false
         }
     }
 
@@ -527,6 +532,75 @@ final class StickerLibrary: ObservableObject {
         }
     }
 
+    func hasUncertainMessageStickerSave(_ message: MessageResponse, packID: String) -> Bool {
+        uncertainMessageStickerSaves.contains(messageStickerSaveKey(message, packID: packID))
+    }
+
+    /// The server rechecks membership, publication, attachment identity, size and type
+    /// before creating media. Never download a stale image and upload it as a new source.
+    func addMessageSticker(
+        _ message: MessageResponse, toPack id: String, emoji: String, name: String?
+    ) async -> MessageStickerResponse? {
+        guard message.canAddToStickerPack, accountID != nil, isOwnedPack(id),
+            !Task.isCancelled
+        else { return nil }
+        let key = messageStickerSaveKey(message, packID: id)
+        if let saved = messageStickerSaves[key] { return saved }
+        guard !uncertainMessageStickerSaves.contains(key) else {
+            error = AppLanguage.localized(
+                "Couldn’t confirm whether the sticker was added. Check the pack before trying again."
+            )
+            return nil
+        }
+        let emoji = StickerPreferences.normalizedEmojiSequences(
+            emoji, maximum: StickerPreferences.maximumStickerEmojiCount
+        ).joined()
+        guard !emoji.isEmpty, !pendingMutationIDs.contains(id),
+            !pendingMutationIDs.contains(key)
+        else { return nil }
+        let requestGeneration = generation
+        pendingMutationIDs.formUnion([id, key])
+        error = nil
+        defer {
+            if generation == requestGeneration { pendingMutationIDs.subtract([id, key]) }
+        }
+        do {
+            let sticker = try await apiClient.createStickerFromMessage(
+                packID: id, chatID: message.chatId, messageID: message.id,
+                emoji: emoji, name: trimmedOptional(name))
+            // A confirmed result still updates the shared library if its sheet closed.
+            guard generation == requestGeneration else { return nil }
+            messageStickerSaves[key] = sticker
+            addSticker(sticker, toCachedPack: id)
+            if isLoading { refreshChanges.append(.stickerAdded(packID: id, sticker: sticker)) }
+            _ = await loadPack(id, force: true)
+            return sticker
+        } catch {
+            guard generation == requestGeneration else { return nil }
+            let definitelyRejected: Bool
+            switch error {
+            case APIError.invalidToken: definitelyRejected = true
+            case APIError.http(let status, _): definitelyRejected = (400..<500).contains(status)
+            default: definitelyRejected = false
+            }
+            if !definitelyRejected {
+                uncertainMessageStickerSaves.insert(key)
+            }
+            let message =
+                definitelyRejected
+                ? AppLanguage.localized("Couldn’t add sticker. Please try again.")
+                : AppLanguage.localized(
+                    "Couldn’t confirm whether the sticker was added. Check the pack before trying again."
+                )
+            await report(error, generation: requestGeneration, message: message)
+            return nil
+        }
+    }
+
+    private func messageStickerSaveKey(_ message: MessageResponse, packID: String) -> String {
+        "message-sticker:\(message.chatId):\(message.id):\(message.attachments.first?.id ?? ""):\(packID)"
+    }
+
     func removeSticker(fromPack id: String, stickerID: String) async -> Bool {
         guard
             !id.isEmpty,
@@ -598,6 +672,8 @@ final class StickerLibrary: ObservableObject {
         packOrder.removeAll()
         favoriteOverrides.removeAll()
         serverFavoriteIDs.removeAll()
+        messageStickerSaves.removeAll()
+        uncertainMessageStickerSaves.removeAll()
         subscriptionOverrides.removeAll()
         cancelDiscovery()
         discoveryPacks.removeAll()

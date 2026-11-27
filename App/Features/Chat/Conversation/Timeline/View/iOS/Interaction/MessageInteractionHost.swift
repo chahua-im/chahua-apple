@@ -24,8 +24,12 @@
 
         private var selectedRow: TimelineMessageRow? {
             guard let target else { return nil }
+            return row(for: target.key)
+        }
+
+        private func row(for key: ConversationMessageStableKey) -> TimelineMessageRow? {
             for row in model.rows {
-                if case .message(let message) = row, message.entry.stableKey == target.key {
+                if case .message(let message) = row, message.entry.stableKey == key {
                     return message
                 }
             }
@@ -78,10 +82,18 @@
                 }
         }
 
+        private func menuContext(for row: TimelineMessageRow) -> MessageInteractionContext {
+            var result = actions.pinContext(for: row, base: context)
+            if let message = row.entry.remoteMessage {
+                result.isFavoriteSticker = actions.isStickerFavorite?(message) ?? false
+            }
+            return result
+        }
+
         private var presentation: MessageInteractionPresentation? {
             if let target, let row = selectedRow {
                 return MessageInteractionPresentation(
-                    row: row, context: actions.pinContext(for: row, base: context),
+                    row: row, context: menuContext(for: row),
                     currentUserID: model.currentUserID,
                     source: target.source,
                     mediaContext: mediaContext, actions: actions,
@@ -104,10 +116,10 @@
                         actions.toggleReaction?(liveRow, emoji)
                     },
                     onAction: { action in
-                        guard !isSelectingMessages, let liveRow = selectedRow,
+                        guard !isSelectingMessages, let liveRow = self.row(for: target.key),
                             MessageActionPolicy(
                                 row: liveRow,
-                                context: actions.pinContext(for: liveRow, base: context)
+                                context: menuContext(for: liveRow)
                             ).availability(of: action) == .enabled
                         else { return }
                         if action == .select, let message = liveRow.entry.remoteMessage {
@@ -150,15 +162,29 @@
                         } else if action == .save, let message = liveRow.entry.remoteMessage {
                             self.target = nil
                             actions.toggleSavedMessage?(message)
+                        } else if action == .favorite, let message = liveRow.entry.remoteMessage,
+                            let toggleFavorite = actions.toggleStickerFavorite,
+                            !(message.sticker.map { actions.pendingStickerIDs.contains($0.id) }
+                                ?? false)
+                        {
+                            self.target = nil
+                            toggleFavorite(message)
+                        } else if action == .toSticker, let message = liveRow.entry.remoteMessage,
+                            let addToStickerPack = actions.addMessageToStickerPack
+                        {
+                            self.target = nil
+                            addToStickerPack(message)
                         } else if action == .copyLink, let message = liveRow.entry.remoteMessage,
                             let link = MessagePermalink(
                                 chatID: message.chatId, messageID: message.id)
                         {
                             UIPasteboard.general.string = link.url.absoluteString
                             self.target = nil
-                        } else if action == .copy, let text = liveRow.entry.text {
+                            actions.didCopyMessage?()
+                        } else if action == .copy, let text = liveRow.entry.clipboardText {
                             UIPasteboard.general.string = text
                             self.target = nil
+                            actions.didCopyMessage?()
                         }
                     },
                     onClose: { self.target = nil }

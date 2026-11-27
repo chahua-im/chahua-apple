@@ -8,6 +8,10 @@
     final class FixtureReactionClient: ChahuaAPIClient {
         var failNextMutation = false
 
+        func createStickerFromMessage(
+            packID: String, chatID: String, messageID: MessageID, emoji: String, name: String?
+        ) async throws -> MessageStickerResponse { throw Failure.unexpectedOperation }
+
         func unreadMentions(chatID: String, threadID: MessageID?) async throws
             -> UnreadMentionIDsResponse
         {

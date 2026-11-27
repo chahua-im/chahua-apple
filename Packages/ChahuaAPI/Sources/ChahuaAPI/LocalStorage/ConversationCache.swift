@@ -92,7 +92,7 @@ public enum CachedConversation: Sendable {
 }
 
 public struct CachedListPage: Sendable {
-    public struct Cursor: Sendable {
+    public struct Cursor: Equatable, Sendable {
         let activity: Double
         let chatID: String
         let threadID: String

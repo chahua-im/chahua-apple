@@ -78,3 +78,4 @@ Config/Local.xcconfig
 *.log
 *.tmp
 *.temp
+__pycache__

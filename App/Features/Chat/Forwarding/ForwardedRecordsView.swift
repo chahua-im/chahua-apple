@@ -42,7 +42,6 @@ struct ForwardedRecordsView: View {
         profileContent
             .modifier(ForwardedRecordsHeader())
             .environment(\.chatComposerInset, 0)
-            .voicePlaybackHeader()
             .voicePlaybackCovered(presentedFile != nil)
             .navigationDestination(item: $childBundleID) { bundleID in
                 ForwardedRecordsView(session: session, bundleID: bundleID)

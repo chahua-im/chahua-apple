@@ -139,9 +139,9 @@ final class MessageActionPolicyTests: XCTestCase {
             let main = MessageActionPolicy(
                 messageType: .text, text: "Own message", isOwn: true,
                 hasReactions: true, context: context)
-            XCTAssertEqual(main.availability(of: .reply), mainAllowed ? .enabled : .hidden)
+            XCTAssertEqual(main.availability(of: .reply), mainAllowed ? .enabled : .disabled)
             XCTAssertEqual(main.availability(of: .edit), mainAllowed ? .enabled : .hidden)
-            XCTAssertEqual(main.availability(of: .thread), creationAllowed ? .enabled : .hidden)
+            XCTAssertEqual(main.availability(of: .thread), creationAllowed ? .enabled : .disabled)
             XCTAssertEqual(main.availability(of: .delete), .enabled)
             XCTAssertEqual(main.availability(of: .forward), .enabled)
             XCTAssertTrue(main.canReact)
@@ -152,7 +152,7 @@ final class MessageActionPolicyTests: XCTestCase {
             let reply = MessageActionPolicy(
                 messageType: .text, text: "Own reply", isOwn: true,
                 isThreadReply: true, context: thread)
-            XCTAssertEqual(reply.availability(of: .reply), replyAllowed ? .enabled : .hidden)
+            XCTAssertEqual(reply.availability(of: .reply), replyAllowed ? .enabled : .disabled)
             XCTAssertEqual(reply.availability(of: .edit), replyAllowed ? .enabled : .hidden)
             let root = MessageActionPolicy(
                 messageType: .text, text: "Thread root", isOwn: true, context: thread)
@@ -180,7 +180,13 @@ final class MessageActionPolicyTests: XCTestCase {
                 XCTAssertFalse(context.canSendOnline(isThreadReply: isThreadView))
                 XCTAssertFalse(context.canCreateThread)
                 XCTAssertFalse(policy.canReact)
-                for action in [MessageMenuAction.reply, .thread, .edit, .delete] {
+                for action in [MessageMenuAction.reply, .thread] {
+                    XCTAssertEqual(
+                        policy.availability(of: action),
+                        action == .thread && isThreadView
+                            ? .hidden : .disabled)
+                }
+                for action in [MessageMenuAction.edit, .delete] {
                     XCTAssertEqual(policy.availability(of: action), .hidden)
                 }
                 for action in [
@@ -287,6 +293,56 @@ final class MessageActionPolicyTests: XCTestCase {
             MessageActionPolicy(messageType: .file, isOwn: true, context: writable)
                 .availability(of: .edit), .hidden)
     }
+    func testCaptionlessPublishedTextCanBeEditedWithoutGrantingCopyOrOtherAuthorsAccess() {
+        let captions: [String?] = [nil, "", " \n"]
+        for text in captions {
+            let own = MessageActionPolicy(
+                messageType: .text, text: text, isOwn: true, context: writable)
+            XCTAssertEqual(own.availability(of: .edit), .enabled)
+            XCTAssertEqual(own.availability(of: .copy), .hidden)
+            XCTAssertEqual(
+                MessageActionPolicy(messageType: .text, text: text, context: writable)
+                    .availability(of: .edit), .hidden)
+            XCTAssertEqual(
+                MessageActionPolicy(
+                    messageType: .text, text: text, isDeleted: true, isOwn: true, context: writable
+                )
+                .availability(of: .edit), .hidden)
+            XCTAssertEqual(
+                MessageActionPolicy(
+                    messageType: .text, text: text, isOwn: true, isForwarded: true,
+                    context: writable
+                ).availability(of: .edit), .hidden)
+        }
+    }
+
+    func testRecalledPinnedMessagesCanOnlyBeUnpinnedByAnAuthorizedIdleScope() {
+        for isDM in [false, true] {
+            var context = MessageInteractionContext(
+                isDM: isDM, canWrite: true, isAdmin: !isDM, isPinned: true)
+            func policy() -> MessageActionPolicy {
+                MessageActionPolicy(messageType: .text, isDeleted: true, context: context)
+            }
+            XCTAssertEqual(policy().availability(of: .unpin), .enabled)
+            XCTAssertEqual(policy().availability(of: .pin), .hidden)
+            context.isPinned = false
+            XCTAssertEqual(policy().availability(of: .unpin), .hidden)
+            context.isPinned = true
+            context.isUpdatingPin = true
+            XCTAssertEqual(policy().availability(of: .unpin), .hidden)
+            context.isUpdatingPin = false
+            context.canUseNetworkActions = false
+            XCTAssertEqual(policy().availability(of: .unpin), .hidden)
+            context.canUseNetworkActions = true
+            context.canWrite = false
+            XCTAssertEqual(policy().availability(of: .unpin), .hidden)
+        }
+        XCTAssertEqual(
+            MessageActionPolicy(
+                messageType: .text, isDeleted: true,
+                context: .init(canWrite: true, isPinned: true)
+            ).availability(of: .unpin), .hidden)
+    }
 
     func testPinActionsRequireAdminAndParentChatAndNoPendingMutation() {
         let admin = MessageInteractionContext(canWrite: true, isAdmin: true)
@@ -365,10 +421,10 @@ final class MessageActionPolicyTests: XCTestCase {
                 .availability(of: .save), .hidden)
     }
 
-    func testExistingThreadsAndThreadViewsCannotCreateNestedThreads() {
+    func testExistingThreadsCanOpenWithoutPermissionToCreateNestedThreads() {
         XCTAssertEqual(
             MessageActionPolicy(messageType: .text, hasThreadInfo: true, context: writable)
-                .availability(of: .thread), .hidden)
+                .availability(of: .thread), .enabled)
         XCTAssertEqual(
             MessageActionPolicy(
                 messageType: .text, context: .init(canWrite: true, isThreadView: true)
@@ -472,6 +528,37 @@ final class MessageActionPolicyTests: XCTestCase {
         let pending = MessageActionPolicy(
             messageType: .text, isPending: true, hasReactions: true, context: writable)
         XCTAssertEqual(pending.availability(of: .reactionDetails), .hidden)
+    }
+
+    func testStickerFavoritesAndConversionRequireLiveApplicableMessages() {
+        let sticker = MessageActionPolicy(messageType: .sticker, context: writable)
+        XCTAssertEqual(sticker.availability(of: .favorite), .enabled)
+        XCTAssertEqual(sticker.availability(of: .save), .hidden)
+        XCTAssertEqual(sticker.availability(of: .toSticker), .hidden)
+        let image = MessageActionPolicy(
+            messageType: .text, hasSingleImageWithoutText: true, context: writable)
+        XCTAssertEqual(image.availability(of: .toSticker), .enabled)
+        XCTAssertEqual(image.availability(of: .favorite), .hidden)
+        for policy in [
+            MessageActionPolicy(
+                messageType: .text, isDeleted: true, hasSingleImageWithoutText: true,
+                context: writable),
+            MessageActionPolicy(
+                messageType: .text, isPending: true, hasSingleImageWithoutText: true,
+                context: writable),
+            MessageActionPolicy(
+                messageType: .text, isForwarded: true, hasSingleImageWithoutText: true,
+                context: writable),
+            MessageActionPolicy(
+                messageType: .text, hasSingleImageWithoutText: true,
+                context: .init(canUseNetworkActions: false)),
+        ] {
+            XCTAssertEqual(policy.availability(of: .toSticker), .hidden)
+        }
+        XCTAssertEqual(
+            MessageActionPolicy(
+                messageType: .sticker, context: .init(canUseNetworkActions: false)
+            ).availability(of: .favorite), .hidden)
     }
 
     func testPersonalLimitAllowsRemovalButNotAnotherUsersReaction() throws {

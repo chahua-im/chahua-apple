@@ -490,6 +490,9 @@ private actor HeldReactionAPI: ChahuaAPIClient {
     func uploadStickerToPack(
         id: String, upload: StickerUpload, emoji: String, name: String?, description: String?
     ) async throws -> MessageStickerResponse { throw APIError.unavailable }
+    func createStickerFromMessage(
+        packID: String, chatID: String, messageID: MessageID, emoji: String, name: String?
+    ) async throws -> MessageStickerResponse { throw APIError.unavailable }
     func removeStickerFromPack(id: String, stickerID: String) async throws {
         throw APIError.unavailable
     }

@@ -2862,6 +2862,94 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(emptied?.complete, true)
     }
 
+    func testConversationListAutomaticallyPagesPastFilteredRowsInActiveAndArchive() async throws {
+        for archived in [false, true] {
+            let (store, _, _, db) = try await makeDurableReadStore(api: FakeChatAPI())
+            let scope: CachedListScope = archived ? .archivedChats : .activeChats
+            let items: [CachedConversation] = (1...101).map { index in
+                .chat(
+                    .init(
+                        id: "cached-\(index)", name: "Conversation \(index)",
+                        lastMessageAt: Date(timeIntervalSince1970: Double(200 - index)),
+                        unreadCount: 0, archived: archived, kind: index == 101 ? .group : .dm))
+            }
+            let epoch = try await db.cacheEpoch()
+            try await db.cacheList(scope, items: items, seen: Set(items.map(\.key)), epoch: epoch)
+            store.setNetworkAuthorized(false)
+            if archived { await store.loadArchivedChats() } else { await store.loadActiveChats() }
+            XCTAssertTrue(store.state.savedListHasMore.contains(scope))
+            let root = ChatListView(
+                store: store, drafts: store.drafts, currentUserID: 1,
+                scope: .constant(.groups), archivedMode: archived, showThreadsInMessages: false,
+                selectedConversationID: nil, onSelectConversation: { _ in }
+            )
+            .environment(\.isWideChatLayout, true)
+            #if os(macOS)
+                let host = NSHostingController(rootView: root.frame(width: 340, height: 480))
+                host.sizingOptions = []
+                let window = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
+                    styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentViewController = host
+                window.makeKeyAndOrderFront(nil)
+                defer {
+                    window.close()
+                    store.reset()
+                }
+            #else
+                let scene = try XCTUnwrap(
+                    UIApplication.shared.connectedScenes.first as? UIWindowScene)
+                let previous = scene.windows.first(where: \.isKeyWindow)
+                let host = UIHostingController(rootView: root)
+                let window = UIWindow(windowScene: scene)
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                defer {
+                    window.isHidden = true
+                    window.rootViewController = nil
+                    previous?.makeKey()
+                    store.reset()
+                }
+            #endif
+            for _ in 0..<150 {
+                if !store.state.savedListHasMore.contains(scope) { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let chats = archived ? store.state.archivedChats : store.state.chats
+            XCTAssertEqual(chats.count, 101, "The footer must advance even with no matching rows")
+            XCTAssertEqual(chats.last?.id, "cached-101")
+            XCTAssertEqual(chats.filter { $0.kind == .group }.map(\.id), ["cached-101"])
+            XCTAssertFalse(store.state.savedListHasMore.contains(scope))
+            XCTAssertEqual(store.state.savedListPagePhases[scope], .loaded)
+        }
+    }
+
+    func testSavedListPagingFailureRetainsRowsAndWaitsForExplicitRetry() async throws {
+        let (store, _, cache, db) = try await makeDurableReadStore(api: FakeChatAPI())
+        defer { store.reset() }
+        let rows = (1...51).map { CachedConversation.chat(chat(id: "\($0)")) }
+        let epoch = try await db.cacheEpoch()
+        try await db.cacheList(.activeChats, items: rows, seen: Set(rows.map(\.key)), epoch: epoch)
+        store.setNetworkAuthorized(false)
+        await store.loadActiveChats()
+        let loaded = store.state.chats
+        let cursor = try XCTUnwrap(store.state.savedListCursors[.activeChats])
+        cache.setSession(uid: nil)
+        await store.loadMoreSavedConversations(chats: true, threads: false, archived: false)
+        XCTAssertEqual(store.state.chats, loaded)
+        XCTAssertEqual(store.state.savedListCursors[.activeChats], cursor)
+        XCTAssertEqual(store.state.savedListPagePhases[.activeChats], .failed)
+        cache.setSession(uid: 1)
+        await store.loadMoreSavedConversations(chats: true, threads: false, archived: false)
+        XCTAssertEqual(store.state.chats, loaded, "Appearance must not retry a failed cursor")
+        await store.loadMoreSavedConversations(
+            chats: true, threads: false, archived: false, retry: true)
+        XCTAssertEqual(store.state.chats.count, 51)
+        XCTAssertFalse(store.state.savedListHasMore.contains(.activeChats))
+        XCTAssertEqual(store.state.savedListPagePhases[.activeChats], .loaded)
+    }
+
     private func chat(id: String, latest: MessageResponse? = nil) -> ChatListItem {
         ChatListItem(
             id: id, name: "Chat \(id)", lastMessageAt: latest?.createdAt, unreadCount: 0,
@@ -3584,7 +3672,7 @@ final class ChatStoreTests: XCTestCase {
             try openMenu()
             let save = try XCTUnwrap(
                 descendants(NSButton.self, in: frame).first {
-                    $0.accessibilityLabel() == MessageMenuAction.save.label(hasAttachments: false)
+                    $0.accessibilityLabel() == MessageMenuAction.save.label()
                 })
             XCTAssertTrue(save.isEnabled)
             try recordMenu("Native Save menu")
@@ -3600,7 +3688,7 @@ final class ChatStoreTests: XCTestCase {
             try openMenu()
             let remove = try XCTUnwrap(
                 descendants(NSButton.self, in: frame).first {
-                    $0.accessibilityLabel() == AppLanguage.localized("Remove Saved Message")
+                    $0.accessibilityLabel() == MessageMenuAction.save.label(isSaved: true)
                 })
             XCTAssertTrue(remove.isEnabled)
             try recordMenu("Native Remove Saved Message menu")
@@ -5829,6 +5917,28 @@ actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionPro
     private var conversationPageGroup: GroupInfoResponse?
     private var notificationMessage: MessageResponse?
     func setNotificationMessage(_ message: MessageResponse) { notificationMessage = message }
+    private var holdsNextMessageUpdate = false
+    private var heldMessageUpdate: CheckedContinuation<MessageResponse, Error>?
+    private(set) var messageUpdateBodies: [UpdateMessageBody] = []
+
+    func holdNextMessageUpdate() { holdsNextMessageUpdate = true }
+
+    func finishMessageUpdate(with result: Result<MessageResponse, Error>) {
+        heldMessageUpdate?.resume(with: result)
+        heldMessageUpdate = nil
+    }
+
+    func updateMessage(chatID: String, messageID: MessageID, body: UpdateMessageBody) async throws
+        -> MessageResponse
+    {
+        messageUpdateBodies.append(body)
+        guard holdsNextMessageUpdate else { throw APIError.unavailable }
+        holdsNextMessageUpdate = false
+        return try await withCheckedThrowingContinuation {
+            heldMessageUpdate = $0
+        }
+    }
+
     private var notificationMessageError: APIError?
     func setNotificationMessageError(_ error: APIError) { notificationMessageError = error }
     private var suspendsNotificationPreferences = false
@@ -6318,23 +6428,122 @@ actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionPro
     func deleteReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         throw APIError.unavailable
     }
-    func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
+    private var ownedStickerPacks: [StickerPackSummary]?
+    private var subscribedStickerPacks: [StickerPackSummary] = []
+    private var favoriteStickers: [MessageStickerResponse] = []
+    private var stickerPackSnapshots: [String: StickerPackDetailResponse] = [:]
+    private var favoriteStickerRequests: [(id: String, favorite: Bool)] = []
+    private var favoriteStickerContinuations: [Int: CheckedContinuation<Void, Error>] = [:]
+    private var favoriteStickerObservers: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var messageStickerRequests:
+        [(packID: String, chatID: String, messageID: MessageID, emoji: String, name: String?)] = []
+    private var messageStickerContinuations:
+        [Int: CheckedContinuation<MessageStickerResponse, Error>] = [:]
+    private var messageStickerObservers: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    func setStickerLibrary(
+        owned: [StickerPackSummary], subscribed: [StickerPackSummary] = [],
+        favorites: [MessageStickerResponse] = []
+    ) {
+        ownedStickerPacks = owned
+        subscribedStickerPacks = subscribed
+        favoriteStickers = favorites
+        stickerPackSnapshots = Dictionary(
+            uniqueKeysWithValues: (owned + subscribed).map {
+                ($0.id, StickerPackDetailResponse(pack: $0, stickers: []))
+            })
+    }
+
+    func listOwnedStickerPacks() async throws -> [StickerPackSummary] {
+        guard let ownedStickerPacks else { throw APIError.unavailable }
+        return ownedStickerPacks
+    }
     func listSubscribedStickerPacks() async throws -> [StickerPackSummary] {
-        throw APIError.unavailable
+        guard ownedStickerPacks != nil else { throw APIError.unavailable }
+        return subscribedStickerPacks
     }
     func listFavoriteStickers() async throws -> [MessageStickerResponse] {
-        throw APIError.unavailable
+        guard ownedStickerPacks != nil else { throw APIError.unavailable }
+        return favoriteStickers
     }
     func getSticker(id: String) async throws -> StickerDetailResponse { throw APIError.unavailable }
     func getStickerPack(id: String) async throws -> StickerPackDetailResponse {
-        throw APIError.unavailable
+        guard let detail = stickerPackSnapshots[id] else { throw APIError.unavailable }
+        return detail
     }
-    func setStickerFavorite(id: String, favorite: Bool) async throws { throw APIError.unavailable }
+    func setStickerFavorite(id: String, favorite: Bool) async throws {
+        let index = favoriteStickerRequests.count
+        favoriteStickerRequests.append((id, favorite))
+        try await withCheckedThrowingContinuation { continuation in
+            favoriteStickerContinuations[index] = continuation
+            for count in favoriteStickerObservers.keys.filter({
+                $0 <= favoriteStickerRequests.count
+            }) {
+                favoriteStickerObservers.removeValue(forKey: count)?.resume()
+            }
+        }
+    }
+
+    func waitForFavoriteStickerRequests(_ count: Int) async {
+        if favoriteStickerRequests.count >= count { return }
+        await withCheckedContinuation { favoriteStickerObservers[count] = $0 }
+    }
+
+    func finishFavoriteSticker(_ index: Int, with result: Result<Void, Error>) {
+        favoriteStickerContinuations.removeValue(forKey: index)?.resume(with: result)
+    }
+
+    func recordedFavoriteStickerRequests() -> [(id: String, favorite: Bool)] {
+        favoriteStickerRequests
+    }
+
+    func createStickerFromMessage(
+        packID: String, chatID: String, messageID: MessageID, emoji: String, name: String?
+    ) async throws -> MessageStickerResponse {
+        let index = messageStickerRequests.count
+        messageStickerRequests.append((packID, chatID, messageID, emoji, name))
+        return try await withCheckedThrowingContinuation { continuation in
+            messageStickerContinuations[index] = continuation
+            for count in messageStickerObservers.keys.filter({ $0 <= messageStickerRequests.count })
+            {
+                messageStickerObservers.removeValue(forKey: count)?.resume()
+            }
+        }
+    }
+
+    func waitForMessageStickerRequests(_ count: Int) async {
+        if messageStickerRequests.count >= count { return }
+        await withCheckedContinuation { messageStickerObservers[count] = $0 }
+    }
+
+    func finishMessageSticker(_ index: Int, with result: Result<MessageStickerResponse, Error>) {
+        if case .success(let sticker) = result,
+            let detail = stickerPackSnapshots[messageStickerRequests[index].packID]
+        {
+            stickerPackSnapshots[detail.pack.id] = StickerPackDetailResponse(
+                pack: detail.pack, stickers: detail.stickers + [sticker])
+        }
+        messageStickerContinuations.removeValue(forKey: index)?.resume(with: result)
+    }
+
+    func recordedMessageStickerRequests()
+        -> [(packID: String, chatID: String, messageID: MessageID, emoji: String, name: String?)]
+    {
+        messageStickerRequests
+    }
     func setStickerPackSubscription(id: String, subscribed: Bool) async throws {
         throw APIError.unavailable
     }
+    private var createdStickerPack: StickerPackSummary?
+
+    func setCreatedStickerPack(_ pack: StickerPackSummary) { createdStickerPack = pack }
+
     func createStickerPack(name: String, description: String?) async throws -> StickerPackSummary {
-        throw APIError.unavailable
+        guard let pack = createdStickerPack else { throw APIError.unavailable }
+        createdStickerPack = nil
+        ownedStickerPacks = (ownedStickerPacks ?? []) + [pack]
+        stickerPackSnapshots[pack.id] = StickerPackDetailResponse(pack: pack, stickers: [])
+        return pack
     }
     func updateStickerPack(id: String, name: String?, description: String?) async throws
         -> StickerPackSummary

@@ -81,8 +81,8 @@
                         .bubble(
                             .init(
                                 view: bubble,
-                                open: { [weak self] rect, feedback in
-                                    self?.openMenu(rect, pressFeedback: feedback)
+                                open: { [weak self] rect, point, feedback in
+                                    self?.openMenu(rect, pressPoint: point, pressFeedback: feedback)
                                 })))
                 } else {
                     holdMarker.stop()
@@ -359,7 +359,10 @@
             else { return }
             binding.actions.replyToMessage?(message)
         }
-        private func openMenu(_ rect: CGRect, pressFeedback: MessageBubblePressFeedback? = nil) {
+        private func openMenu(
+            _ rect: CGRect, pressPoint: CGPoint? = nil,
+            pressFeedback: MessageBubblePressFeedback? = nil
+        ) {
             guard let binding, !binding.context.isInteractionPreview,
                 !binding.actions.interactionContext.isReadOnly, !isSelectingMessages,
                 case .message(let row) = binding.presentation.row,
@@ -375,6 +378,7 @@
                 row,
                 .init(
                     rect: rect, presentation: binding.presentation, layout: binding.layout,
+                    pressPoint: pressPoint,
                     pressFeedback: pressFeedback))
         }
         private func swipe(_ displacement: CGFloat) {

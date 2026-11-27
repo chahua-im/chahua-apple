@@ -1,16 +1,16 @@
 import Foundation
 
-/// Draft previews have no HTTP endpoint. Keep this bounded RPC exchange separate
-/// from the legacy realtime event consumer, which cannot decode JSON-RPC replies.
+/// Bounded one-shot RPCs stay separate from the legacy realtime event consumer,
+/// which cannot decode JSON-RPC replies. Mutations are never automatically retried.
 /// The socket owns no watches, stays inactive, and closes on completion/cancellation.
-enum DraftLinkPreviewRPC {
-    static func fetch(
+enum SessionRPC {
+    static func call<Params: Encodable & Sendable, Result: Decodable & Sendable>(
         socket: URLSessionWebSocketTask, token: String, appVersion: String?,
-        chatID: String, urls: [String], timeout: TimeInterval
-    ) async throws -> [MessageLinkPreview] {
+        method: String, params: Params, timeout: TimeInterval
+    ) async throws -> Result {
         defer { socket.cancel(with: .goingAway, reason: nil) }
         return try await withTaskCancellationHandler {
-            try await withThrowingTaskGroup(of: [MessageLinkPreview].self) { group in
+            try await withThrowingTaskGroup(of: Result.self) { group in
                 group.addTask {
                     try await Task.sleep(for: .seconds(timeout))
                     socket.cancel(with: .goingAway, reason: nil)
@@ -33,8 +33,7 @@ enum DraftLinkPreviewRPC {
                         to: socket)
                     try await send(
                         Request(
-                            id: 2, method: "messages.previewLinks",
-                            params: PreviewParams(chatId: chatID, urls: urls)),
+                            id: 2, method: method, params: params),
                         to: socket)
                     return try await receive(id: 2, from: socket)
                 }
@@ -78,6 +77,11 @@ enum DraftLinkPreviewRPC {
             if let error = header.error {
                 switch error.code {
                 case 1001: throw APIError.invalidToken
+                case -32602, 1000: throw APIError.http(status: 400, body: data)
+                case -32601, 1004: throw APIError.http(status: 404, body: data)
+                case 1009: throw APIError.http(status: 409, body: data)
+                case 1010: throw APIError.http(status: 410, body: data)
+                case 1013: throw APIError.http(status: 413, body: data)
                 case 1003: throw APIError.http(status: 403, body: data)
                 case 1503, 1429: throw APIError.unavailable
                 default: throw APIError.unexpectedResponse
@@ -103,10 +107,6 @@ enum DraftLinkPreviewRPC {
         let authenticated: Bool
     }
     private struct AppState: Encodable { let state = "inactive" }
-    private struct PreviewParams: Encodable {
-        let chatId: String
-        let urls: [String]
-    }
     private struct Header: Decodable {
         let jsonrpc: String
         let id: Int?

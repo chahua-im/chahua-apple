@@ -519,6 +519,346 @@ final class ComposerFocusTests: XCTestCase {
             "Queued original")
     }
 
+    func testPublishedEditLocksInputUntilReplyThenRestoresDraftOrRetainsFailedEdit() async throws {
+        try await verifyPublishedEditCompletion(
+            TimelineTestFixtures.message(id: 1, senderID: 1, at: 1, text: "Original message"))
+    }
+
+    func testCaptionlessImageEditSavesCaptionWithoutRemovingImage() async throws {
+        try await verifyPublishedEditCompletion(
+            TimelineTestFixtures.message(
+                id: 1, senderID: 1, at: 1,
+                fields: [
+                    "message": NSNull(), "hasAttachments": true,
+                    "attachments": [
+                        [
+                            "id": "image", "url": "https://example.invalid/image.png",
+                            "kind": "image/png", "size": 900, "fileName": "image.png",
+                            "width": 400, "height": 300,
+                        ]
+                    ],
+                ]))
+    }
+
+    func testForwardingPickerPreviewAndRecordsDoNotDuplicatePlaybackControls() async throws {
+        let message = try TimelineTestFixtures.message(id: 1, at: 0)
+        let api = FakeChatAPI()
+        await api.setForwardedResponses([
+            .init(
+                total: 1,
+                messages: [
+                    .init(
+                        originalMessageId: message.id, originalChatId: message.chatId,
+                        message: message.message, messageType: .text, sender: message.sender,
+                        originalCreatedAt: message.createdAt)
+                ])
+        ])
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        let session = VoicePlaybackSession.shared
+        let playback = VoicePlaybackController.controller(
+            for: message, url: try voicePlaybackSample(), reusing: nil)
+        session.adopt(playback)
+        let model = ForwardDestinationPickerModel(
+            store: store, sources: [message], loadSources: nil)
+        model.start()
+        defer {
+            session.stop()
+            model.stop()
+            store.reset()
+        }
+        let root = VStack {
+            VoicePlaybackBar(controller: playback)
+            ForwardPickerContent(
+                store: store, model: model, query: .constant(""), onClose: {}, onCompleted: {})
+            NavigationStack {
+                ForwardedRecordsView(store: store, chatID: message.chatId, messageID: message.id)
+            }
+            .frame(height: 160)
+        }
+        .accessibilityElement(children: .contain)
+        .environment(\.accessibilityEnabled, true)
+        .environment(
+            \.voicePlaybackHeaderRoute,
+            VoicePlaybackHeaderRoute(
+                currentUserID: 1, chatName: { _ in "Source chat" }, open: { _, _, _ in }))
+        var observedPlaybackLabels: [String] = []
+        #if os(iOS)
+            let restoreAccessibility = try FocusComposerHarness.enableAccessibilityForTests()
+            defer { restoreAccessibility() }
+        #endif
+        #if os(macOS)
+            let host = NSHostingController(rootView: root.frame(width: 640, height: 720))
+            host.sizingOptions = []
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 640, height: 720),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.makeKeyAndOrderFront(nil)
+            defer { window.close() }
+            let labelSelector = NSSelectorFromString("accessibilityLabel")
+            let childrenSelector = NSSelectorFromString("accessibilityChildren")
+            func playbackControls(_ value: Any) -> Int {
+                // SwiftUI nodes expose AppKit accessors dynamically without
+                // declaring NSAccessibilityProtocol conformance.
+                guard let element = value as? NSObject else { return 0 }
+                let label =
+                    element.responds(to: labelSelector)
+                    ? element.perform(labelSelector)?.takeUnretainedValue() as? String : nil
+                if let label { observedPlaybackLabels.append(label) }
+                let children =
+                    element.responds(to: childrenSelector)
+                    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+                return (label == "Stop voice message" ? 1 : 0)
+                    + (children ?? (value as? NSView)?.subviews ?? [])
+                    .reduce(0) { $0 + playbackControls($1) }
+            }
+        #else
+            let scene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let previous = scene.windows.first(where: \.isKeyWindow)
+            let host = UIHostingController(rootView: root)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+                previous?.makeKey()
+            }
+            func playbackControls(_ value: Any) -> Int {
+                guard let element = value as? NSObject else { return 0 }
+                if let label = element.accessibilityLabel { observedPlaybackLabels.append(label) }
+                let count = element.accessibilityElementCount()
+                let children: [Any] =
+                    count > 0 && count < 1000
+                    ? (0..<count).compactMap { element.accessibilityElement(at: $0) }
+                    : (element as? UIView)?.subviews ?? []
+                return (element.accessibilityLabel == "Stop voice message" ? 1 : 0)
+                    + children.reduce(0) { $0 + playbackControls($1) }
+            }
+        #endif
+        try await waitUntil { playbackControls(window) > 0 }
+        let initialControls = playbackControls(window)
+        if initialControls != 1 {
+            let labels = XCTAttachment(string: observedPlaybackLabels.joined(separator: "\n"))
+            labels.name = "Forwarding accessibility labels"
+            labels.lifetime = .keepAlways
+            add(labels)
+        }
+        XCTAssertEqual(initialControls, 1, "Only the source owns playback controls")
+        model.choose(.saved)
+        try await waitUntil { !model.isResolving && model.selectedTarget != nil }
+        XCTAssertNotNil(model.selectedTarget)
+        try await pause()
+        #if os(macOS)
+            let bitmap = try XCTUnwrap(
+                host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+            host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+            let capture = XCTAttachment(
+                data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png")
+        #else
+            let capture = XCTAttachment(
+                image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                })
+        #endif
+        capture.name = "Source playback controls beside forwarding confirmation and records"
+        capture.lifetime = .keepAlways
+        add(capture)
+        XCTAssertEqual(playbackControls(window), 1, "Confirmation must not duplicate the banner")
+        model.changeDestination()
+        try await pause()
+        XCTAssertEqual(playbackControls(window), 1)
+        XCTAssertTrue(session.controller === playback)
+    }
+
+    private func verifyPublishedEditCompletion(_ remote: MessageResponse) async throws {
+        let api = FakeChatAPI(messageResults: [
+            "chat": [.success(.init(messages: [remote]))]
+        ])
+        await api.setConversationPageMetadata(
+            group: .init(id: "chat", myRole: .admin, kind: .group))
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        addTeardownBlock { await api.finishMessageUpdate(with: .failure(CancellationError())) }
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        store.outgoingQueue.setDispatchAuthorized(false)
+        await store.outgoingQueue.activate(uid: 1)
+        addTeardownBlock { @MainActor in await store.outgoingQueue.deactivate() }
+        store.drafts.setDraftText("Ordinary draft", chatID: "chat")
+        let root = NavigationStack {
+            ChatDetailView(
+                chat: .init(
+                    id: "chat", name: "Edit completion", unreadCount: 0,
+                    archived: false, kind: .group),
+                currentUserID: 1, store: store)
+        }
+        .environment(\.scenePhase, .active)
+        #if os(macOS)
+            let host = NSHostingController(rootView: root.frame(width: 800, height: 720))
+            host.sizingOptions = []
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 800, height: 720),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.makeKeyAndOrderFront(nil)
+            defer {
+                window.close()
+                store.reset()
+            }
+        #else
+            let restoreAccessibility = try FocusComposerHarness.enableAccessibilityForTests()
+            defer { restoreAccessibility() }
+            let scene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let previous = scene.windows.first(where: \.isKeyWindow)
+            let host = UIHostingController(rootView: root)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+                previous?.makeKey()
+                store.reset()
+            }
+        #endif
+        func views(_ view: ComposerTestView) -> [ComposerTestView] {
+            [view] + view.subviews.flatMap(views)
+        }
+        func binding() -> TimelineRowBinding? {
+            views(host.view).compactMap { $0 as? TimelineRowView }
+                .compactMap(\.binding).first {
+                    $0.presentation.row.messageID == remote.id
+                }
+        }
+        func actions() -> TimelineBubbleActions? { binding()?.actions }
+        #if os(macOS)
+            func editor() -> NSTextView? {
+                views(host.view).compactMap { $0 as? ComposerMediaTextView }.first
+            }
+            func text() -> String? { editor()?.string }
+            func replaceAndSave(_ text: String) async throws {
+                let input = try XCTUnwrap(editor())
+                XCTAssertTrue(window.makeFirstResponder(input))
+                input.selectAll(nil)
+                input.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+                try await pause()
+                let point = host.view.convert(
+                    NSPoint(
+                        x: host.view.bounds.width - 38,
+                        y: host.view.isFlipped ? host.view.bounds.height - 38 : 38), to: nil)
+                let timestamp = ProcessInfo.processInfo.systemUptime
+                let release = try XCTUnwrap(
+                    NSEvent.mouseEvent(
+                        with: .leftMouseUp, location: point, modifierFlags: [],
+                        timestamp: timestamp + 0.01, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 1, clickCount: 1, pressure: 0))
+                NSApp.postEvent(release, atStart: true)
+                NSApp.sendEvent(
+                    try XCTUnwrap(
+                        NSEvent.mouseEvent(
+                            with: .leftMouseDown, location: point, modifierFlags: [],
+                            timestamp: timestamp, windowNumber: window.windowNumber,
+                            context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+            }
+        #else
+            weak var cachedEditor: UITextView?
+            func editor() -> UITextView? {
+                if let cachedEditor, cachedEditor.window === window { return cachedEditor }
+                let input = views(host.view).compactMap { $0 as? UITextView }
+                    .first(where: \.isEditable)
+                cachedEditor = input
+                return input
+            }
+            func text() -> String? { editor()?.text }
+            func replaceAndSave(_ text: String) async throws {
+                let input = try XCTUnwrap(editor())
+                XCTAssertTrue(input.becomeFirstResponder())
+                input.selectedTextRange = input.textRange(
+                    from: input.beginningOfDocument, to: input.endOfDocument)
+                input.insertText(text)
+                try await pause()
+                let save = try XCTUnwrap(
+                    FocusComposerHarness.accessibilityElement(named: "Save changes", in: host.view))
+                XCTAssertTrue(save.accessibilityActivate())
+            }
+        #endif
+        func canEdit() -> Bool {
+            guard let input = editor(), input.isEditable else { return false }
+            #if os(iOS)
+                // SwiftUI disables the multiline field's interaction container;
+                // UIKit can retain an editable text view inside that disabled field.
+                var view: UIView? = input
+                while let current = view {
+                    if !current.isUserInteractionEnabled { return false }
+                    if let control = current as? UIControl, !control.isEnabled { return false }
+                    view = current.superview
+                }
+            #endif
+            return true
+        }
+        func waitForUpdate(_ count: Int) async throws {
+            for _ in 0..<150 {
+                if await api.messageUpdateBodies.count == count { return }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTFail("The editor did not submit the update")
+            throw APIError.unavailable
+        }
+        try await waitUntil {
+            actions()?.interactionContext.canSendOnline(isThreadReply: false) == true
+                && actions()?.editMessage != nil && editor() != nil
+        }
+        XCTAssertTrue(actions()?.interactionContext.canSendOnline(isThreadReply: false) == true)
+        try XCTUnwrap(actions()?.editMessage)(remote)
+        try await waitUntil { text() == (remote.message ?? "") }
+        XCTAssertEqual(text(), remote.message ?? "")
+        await api.holdNextMessageUpdate()
+        try await replaceAndSave("Edited message")
+        try await waitForUpdate(1)
+        try await pause()
+        XCTAssertFalse(canEdit(), "The pending save must lock the native input surface")
+        await api.finishMessageUpdate(with: .success(remote.replacingMessageText("Edited message")))
+        try await waitUntil { text() == "Ordinary draft" && canEdit() }
+        XCTAssertEqual(text(), "Ordinary draft")
+        XCTAssertTrue(canEdit())
+        XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Ordinary draft")
+        guard case .message(let savedRow) = try XCTUnwrap(binding()?.presentation.row) else {
+            return XCTFail("The updated message must remain in the timeline")
+        }
+        XCTAssertEqual(savedRow.entry.remoteMessage?.attachments, remote.attachments)
+
+        let updated = remote.replacingMessageText("Edited message")
+        try XCTUnwrap(actions()?.editMessage)(updated)
+        try await waitUntil { text() == updated.message }
+        await api.holdNextMessageUpdate()
+        try await replaceAndSave("Retry this edit")
+        try await waitForUpdate(2)
+        try await pause()
+        XCTAssertFalse(canEdit(), "The pending save must lock the native input surface")
+        await api.finishMessageUpdate(with: .failure(APIError.unavailable))
+        try await waitUntil { canEdit() }
+        XCTAssertEqual(text(), "Retry this edit")
+        XCTAssertTrue(canEdit())
+        XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Ordinary draft")
+        let submitted = await api.messageUpdateBodies
+        XCTAssertEqual(submitted.map(\.message), ["Edited message", "Retry this edit"])
+    }
+
     func testVoicePreviewStopInvalidatesPendingLoadWithoutPublishingIdleResets() async throws {
         let playback = VoicePlaybackController()
         var changes = 0
@@ -1627,12 +1967,22 @@ private final class FocusComposerHarness {
         let host: UIHostingController<FocusComposerRoot>
         let window: UIWindow
         weak var priorKeyWindow: UIWindow?
-        // Test-host-only SPI: UIKit's in-process XCTest host does not enable
-        // SwiftUI's accessibility tree. Needed to activate the real Send button.
-        private static let accessibilityLibrary = dlopen(
-            "/usr/lib/libAccessibility.dylib", RTLD_NOW)
         private var restoreAccessibility: (() -> Void)?
     #endif
+    // Test-host-only SPI: in-process XCTest does not enable SwiftUI's
+    // accessibility tree. Activate real controls and restore the prior setting.
+    private static let accessibilityLibrary = dlopen(
+        "/usr/lib/libAccessibility.dylib", RTLD_NOW)
+
+    static func enableAccessibilityForTests() throws -> () -> Void {
+        let library = try XCTUnwrap(accessibilityLibrary)
+        let setSymbol = try XCTUnwrap(dlsym(library, "_AXSApplicationAccessibilitySetEnabled"))
+        let getSymbol = try XCTUnwrap(dlsym(library, "_AXSApplicationAccessibilityEnabled"))
+        let setEnabled = unsafeBitCast(setSymbol, to: (@convention(c) (Bool) -> Void).self)
+        let wasEnabled = unsafeBitCast(getSymbol, to: (@convention(c) () -> Bool).self)()
+        setEnabled(true)
+        return { setEnabled(wasEnabled) }
+    }
 
     init(text: String, enabled: Bool, caption: Bool) throws {
         state = FocusComposerState(text: text, enabled: enabled, caption: caption)
@@ -1652,13 +2002,7 @@ private final class FocusComposerHarness {
             window.makeKeyAndOrderFront(nil)
         #else
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
-            let library = try XCTUnwrap(Self.accessibilityLibrary)
-            let setSymbol = try XCTUnwrap(dlsym(library, "_AXSApplicationAccessibilitySetEnabled"))
-            let getSymbol = try XCTUnwrap(dlsym(library, "_AXSApplicationAccessibilityEnabled"))
-            let setEnabled = unsafeBitCast(setSymbol, to: (@convention(c) (Bool) -> Void).self)
-            let wasEnabled = unsafeBitCast(getSymbol, to: (@convention(c) () -> Bool).self)()
-            setEnabled(true)
-            restoreAccessibility = { setEnabled(wasEnabled) }
+            restoreAccessibility = try Self.enableAccessibilityForTests()
             host = UIHostingController(rootView: FocusComposerRoot(state: state))
             priorKeyWindow = scene.windows.first(where: \.isKeyWindow)
             window = UIWindow(windowScene: scene)

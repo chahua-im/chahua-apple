@@ -102,9 +102,12 @@ extension ChatDetailView {
         @Binding var stickerToView: StickerSelection?
         @Binding var reactionDetailsMessage: ReactionDetailsSelection?
         @Binding var pinToUnpin: PinResponse?
+        @Binding var messageToPin: MessageResponse?
+        @Binding var feedback: String?
         let chatID: String
         let onJumpToPin: (MessageResponse) -> Void
         let onOpenThread: ((MessageResponse) -> Void)?
+        let onPin: (MessageResponse) -> Void
         #if os(iOS)
             @Environment(\.horizontalSizeClass) private var horizontalSizeClass
         #endif
@@ -140,6 +143,17 @@ extension ChatDetailView {
                     }
                 }
                 .alert(
+                    "Pin Message",
+                    isPresented: Binding(
+                        get: { messageToPin != nil }, set: { if !$0 { messageToPin = nil } }),
+                    presenting: messageToPin
+                ) { message in
+                    Button("Pin") { onPin(message) }
+                    Button("Cancel", role: .cancel) { messageToPin = nil }
+                } message: { _ in
+                    Text("Would you like to pin this message?")
+                }
+                .alert(
                     "Unpin Message",
                     isPresented: Binding(
                         get: { pinToUnpin != nil }, set: { if !$0 { pinToUnpin = nil } })
@@ -149,6 +163,11 @@ extension ChatDetailView {
                             Task {
                                 guard canManagePins() else { return }
                                 await pins.unpin(pin)
+                                guard canManagePins(), !Task.isCancelled,
+                                    pins.pinsByChatID[chatID]?.contains(where: { $0.id == pin.id })
+                                        == false
+                                else { return }
+                                feedback = AppLanguage.localized("Unpinned")
                             }
                         }
                     }
@@ -223,9 +242,9 @@ extension ChatDetailView {
         let onForwardCompleted: () -> Void
         func body(content: Content) -> some View {
             content
+                // Forwarding does not take playback-header ownership from the source chat.
                 .sheet(item: $forwardRequest) { request in
                     forwardingPicker(request)
-                        .voicePlaybackCover { forwardRequest = nil }
                 }
                 .navigationDestination(item: $systemMessageTarget) { message in
                     ChatDetailPresentation(
@@ -263,6 +282,8 @@ struct ChatDetailDeletionPresentation: ViewModifier {
     @Binding var messageToDelete: MessageResponse?
     @Binding var editingMessage: MessageResponse?
     @Binding var deleteError: Bool
+    @Binding var feedback: String?
+    let isCurrentSession: () -> Bool
     let canDelete: (MessageResponse) -> Bool
     let groupChatWriteRestricted: () -> Bool
     let cancelEditing: () -> Void
@@ -270,18 +291,20 @@ struct ChatDetailDeletionPresentation: ViewModifier {
     func body(content: Content) -> some View {
         content
             .confirmationDialog(
-                AppLanguage.localized("Delete Message"),
+                AppLanguage.localized("Recall Message"),
                 isPresented: Binding(
                     get: { messageToDelete != nil }, set: { if !$0 { messageToDelete = nil } }),
                 titleVisibility: .visible,
                 presenting: messageToDelete
             ) { message in
-                Button("Delete", role: .destructive) {
+                Button("Recall", role: .destructive) {
                     Task {
                         guard canDelete(message) else { return }
                         let deleted = await store.deleteMessage(message)
+                        guard isCurrentSession(), !Task.isCancelled else { return }
                         if deleted {
                             if editingMessage?.id == message.id { cancelEditing() }
+                            feedback = AppLanguage.localized("Recalled")
                         } else {
                             deleteError = true
                         }
@@ -290,10 +313,10 @@ struct ChatDetailDeletionPresentation: ViewModifier {
                 Button("Cancel", role: .cancel) {}
             } message: { message in
                 if message.sender.uid == currentUserID {
-                    Text("Are you sure you want to delete this message?")
+                    Text("Are you sure you want to recall this message?")
                 } else {
                     Text(
-                        "Are you sure you want to delete this message from \(message.sender.name ?? AppLanguage.localized("this user"))?"
+                        "Are you sure you want to recall this message from \(message.sender.name ?? AppLanguage.localized("this user"))?"
                     )
                 }
             }
@@ -303,6 +326,75 @@ struct ChatDetailDeletionPresentation: ViewModifier {
                 if groupChatWriteRestricted() {
                     Text("Your user group cannot post in group chats.")
                 }
+            }
+    }
+}
+
+struct ChatDetailStickerPresentation: ViewModifier {
+    @ObservedObject var library: StickerLibrary
+    @Binding var messageToMakeSticker: ChatDetailView.MessageStickerSelection?
+    @Binding var errorMessage: String?
+    let canUseNetworkActions: Bool
+    let onAdded: () -> Void
+    let sourceIsAvailable: (MessageResponse) -> Bool
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(item: $messageToMakeSticker) { selection in
+                MessageStickerSheet(
+                    library: library, message: selection.message,
+                    sourceIsAvailable: { sourceIsAvailable(selection.message) },
+                    onAdded: onAdded
+                )
+                .voicePlaybackCover { messageToMakeSticker = nil }
+            }
+            .alert(
+                "Stickers",
+                isPresented: Binding(
+                    get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
+            ) {
+                if !library.hasLoadedLibrary, canUseNetworkActions {
+                    Button("Retry") { Task { await loadFavorites() } }
+                }
+                Button("OK") { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "")
+            }
+            .task(id: canUseNetworkActions) {
+                guard canUseNetworkActions, !library.hasLoadedLibrary else { return }
+                await loadFavorites()
+            }
+    }
+
+    private func loadFavorites() async {
+        await library.refresh()
+        guard !Task.isCancelled else { return }
+        if let error = library.error {
+            errorMessage = error
+            library.error = nil
+        }
+    }
+}
+
+struct MessageActionFeedbackPresentation: ViewModifier {
+    @Binding var feedback: String?
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                if let feedback {
+                    Text(feedback)
+                        .font(.callout)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(.top, 72)
+                        .allowsHitTesting(false)
+                }
+            }
+            .task(id: feedback) {
+                guard feedback != nil else { return }
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                feedback = nil
             }
     }
 }
