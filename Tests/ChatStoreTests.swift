@@ -1738,6 +1738,7 @@ final class ChatStoreTests: XCTestCase {
                 messageType: .text, sender: source.sender, originalCreatedAt: source.createdAt)
             let api = FakeChatAPI(
                 messageResults: ["chat": [.success(.init(messages: [card]))]])
+            await api.setStickerLibrary(owned: [])
             await api.setForwardedResponses([
                 .init(total: 2, messages: [leaf, nested]), .init(total: 1, messages: [leaf]),
             ])

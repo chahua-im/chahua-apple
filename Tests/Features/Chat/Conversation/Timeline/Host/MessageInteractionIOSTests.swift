@@ -22,6 +22,8 @@
                         row: .message(row), currentUserID: 1, isThreadTimeline: false,
                         environment: environment)
                     let layout = TimelineLayoutEngine().layout(prepared, environment: environment)
+                    // Real source rows need not start on a display-pixel boundary.
+                    let sourceOffset = CGPoint(x: 0.125, y: 300.125)
                     var actions = TimelineBubbleActions()
                     actions.toggleReaction = { _, _ in }
                     var selectedActions: [MessageMenuAction] = []
@@ -30,7 +32,8 @@
                         row: row, context: .init(canWrite: true, isAdmin: true, canSave: true),
                         currentUserID: 1,
                         source: .init(
-                            rect: try XCTUnwrap(layout.frames[.bubble]).offsetBy(dx: 0, dy: 300),
+                            rect: try XCTUnwrap(layout.frames[.bubble]).offsetBy(
+                                dx: sourceOffset.x, dy: sourceOffset.y),
                             presentation: prepared, layout: layout),
                         mediaContext: nil, actions: actions, interfaceStyle: style,
                         onEditPending: { _ in }, onRemovePending: { _ in }, isReacting: false,
@@ -49,7 +52,7 @@
                     XCTAssertEqual(window.bounds.size, size)
                     let original = TimelineRowView(
                         frame: CGRect(
-                            x: 0, y: 300, width: layout.size.width, height: layout.size.height))
+                            origin: sourceOffset, size: layout.size))
                     original.bind(
                         .init(
                             presentation: prepared, layout: layout,
@@ -85,8 +88,11 @@
                         buttons(in: controller.view).first {
                             $0.accessibilityIdentifier == "more-reactions"
                         })
-                    XCTAssertEqual(more.bounds.width, 44, accuracy: 0.01)
-                    XCTAssertEqual(more.bounds.height, 44, accuracy: 0.01)
+                    let reactionRow = try XCTUnwrap(more.superview)
+                    for button in buttons(in: reactionRow) {
+                        XCTAssertGreaterThanOrEqual(button.bounds.width, 44)
+                        XCTAssertGreaterThanOrEqual(button.bounds.height, 44)
+                    }
                     try assertGridGeometry(in: controller.view)
                     try assertPreviewContour(original: original, controller: controller)
                     attachSurface(

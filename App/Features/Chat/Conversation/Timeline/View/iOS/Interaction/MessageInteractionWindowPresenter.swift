@@ -152,7 +152,8 @@
         private let previewClip = UIView()
         private let preview = TimelineRowView(frame: .zero)
         private let reactions = MessageInteractionSurface(radius: MessageMenuLayout.radius)
-        private let reactionStack = UIStackView()
+        private let reactionStack = UIView()
+        private var reactionSlots: [UIView] = []
         private let actionsPanel = UIView()
         private let actionStack = UIStackView()
         private let placeholder = UIView()
@@ -203,9 +204,6 @@
             previewViewport.addSubview(previewClip)
             previewClip.addSubview(preview)
             view.addSubview(reactions)
-            reactionStack.axis = .horizontal
-            reactionStack.spacing = 0
-            reactionStack.distribution = .fillEqually
             reactions.content.addSubview(reactionStack)
             view.addSubview(actionsPanel)
             actionStack.axis = .vertical
@@ -381,11 +379,9 @@
         private func rebuildControls() {
             guard isViewLoaded else { return }
             keyboardButtons.removeAll(keepingCapacity: true)
-            for item in reactionStack.arrangedSubviews { item.removeFromSuperview() }
+            reactionSlots.removeAll(keepingCapacity: true)
+            for item in reactionStack.subviews { item.removeFromSuperview() }
             for item in actionStack.arrangedSubviews { item.removeFromSuperview() }
-            for item in reactionStack.subviews where item is UIActivityIndicatorView {
-                item.removeFromSuperview()
-            }
             let value = presentation
             let policy = MessageActionPolicy(row: value.row, context: value.context)
             let recent =
@@ -405,7 +401,8 @@
                 if selected { button.accessibilityTraits.insert(.selected) }
                 button.addAction(
                     UIAction { [weak self] _ in self?.react(emoji) }, for: .touchUpInside)
-                reactionStack.addArrangedSubview(button)
+                reactionSlots.append(button)
+                reactionStack.addSubview(button)
                 if policy.canReact { keyboardButtons.append(button) }
             }
             if !value.eligibility.distinctLimitReached {
@@ -421,10 +418,13 @@
                 more.accessibilityIdentifier = "more-reactions"
                 more.addAction(
                     UIAction { [weak self] _ in self?.showEmojiPicker() }, for: .touchUpInside)
-                reactionStack.addArrangedSubview(more)
+                reactionSlots.append(more)
+                reactionStack.addSubview(more)
                 if policy.canReact { keyboardButtons.append(more) }
             } else {
-                reactionStack.addArrangedSubview(UIView())
+                let placeholder = UIView()
+                reactionSlots.append(placeholder)
+                reactionStack.addSubview(placeholder)
             }
             if value.isReacting {
                 let progress = UIActivityIndicatorView(style: .medium)
@@ -746,6 +746,18 @@
                 x: placement.reactionFrame.midX, y: placement.reactionFrame.midY + offsetY)
             reactionStack.frame = reactions.bounds.insetBy(
                 dx: MessageMenuLayout.padding, dy: MessageMenuLayout.padding)
+            // UIStackView pixel-rounds arranged frames and can shave a pixel off a
+            // 44-point target at fractional source positions. Preserve the exact
+            // slot sizes here, as the native macOS reaction row does.
+            let reactionWidth =
+                reactionStack.bounds.width / CGFloat(max(1, reactionSlots.count))
+            let isRightToLeft = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+            for (index, slot) in reactionSlots.enumerated() {
+                let position = isRightToLeft ? reactionSlots.count - index - 1 : index
+                slot.frame = CGRect(
+                    x: CGFloat(position) * reactionWidth, y: 0,
+                    width: reactionWidth, height: reactionStack.bounds.height)
+            }
             reactions.isHidden = !policy.canReact || picking
             for child in reactionStack.subviews {
                 guard let progress = child as? UIActivityIndicatorView else { continue }
