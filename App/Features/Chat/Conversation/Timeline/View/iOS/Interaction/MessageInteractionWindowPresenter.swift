@@ -744,11 +744,16 @@
             let offsetY = entered || reduceMotion ? 0 : presentation.source.rect.minY - frame.minY
             reactions.center = CGPoint(
                 x: placement.reactionFrame.midX, y: placement.reactionFrame.midY + offsetY)
+            // Safe-area insets can leave less than the standard menu width.
+            // Reduce horizontal padding before reducing the 44-point targets.
+            let reactionPadding = min(
+                MessageMenuLayout.padding,
+                max(
+                    0,
+                    (reactions.bounds.width
+                        - CGFloat(reactionSlots.count) * MessageMenuLayout.reactionTarget) / 2))
             reactionStack.frame = reactions.bounds.insetBy(
-                dx: MessageMenuLayout.padding, dy: MessageMenuLayout.padding)
-            // UIStackView pixel-rounds arranged frames and can shave a pixel off a
-            // 44-point target at fractional source positions. Preserve the exact
-            // slot sizes here, as the native macOS reaction row does.
+                dx: reactionPadding, dy: MessageMenuLayout.padding)
             let reactionWidth =
                 reactionStack.bounds.width / CGFloat(max(1, reactionSlots.count))
             let isRightToLeft = view.effectiveUserInterfaceLayoutDirection == .rightToLeft

@@ -70,6 +70,16 @@
                     controller.beginAppearanceTransition(true, animated: false)
                     window.addSubview(controller.view)
                     controller.endAppearanceTransition()
+                    window.layoutIfNeeded()
+                    controller.view.layoutIfNeeded()
+                    if size.width == 390 {
+                        // Keep the constrained safe width covered on every simulator,
+                        // including devices without Duo's horizontal safe-area insets.
+                        let insets = controller.view.safeAreaInsets
+                        let extraInset = max(0, 84 - insets.left - insets.right) / 2
+                        controller.additionalSafeAreaInsets = UIEdgeInsets(
+                            top: 0, left: extraInset, bottom: 0, right: extraInset)
+                    }
                     defer {
                         controller.cleanup()
                         controller.beginAppearanceTransition(false, animated: false)
@@ -90,8 +100,11 @@
                         })
                     let reactionRow = try XCTUnwrap(more.superview)
                     for button in buttons(in: reactionRow) {
-                        XCTAssertGreaterThanOrEqual(button.bounds.width, 44)
-                        XCTAssertGreaterThanOrEqual(button.bounds.height, 44)
+                        let geometry =
+                            "Button: \(button.bounds), row: \(reactionRow.bounds), "
+                            + "surface: \(String(describing: reactionRow.superview?.bounds))"
+                        XCTAssertGreaterThanOrEqual(button.bounds.width, 44, geometry)
+                        XCTAssertGreaterThanOrEqual(button.bounds.height, 44, geometry)
                     }
                     try assertGridGeometry(in: controller.view)
                     try assertPreviewContour(original: original, controller: controller)
